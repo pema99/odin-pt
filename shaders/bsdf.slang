@@ -353,7 +353,7 @@ public DisneyBSDF make_disney_bsdf(float3 albedo, float metallic, float roughnes
     m.weighting.roughness = roughness;
     m.weighting.base_weight = float3(1.0 - metallic);
     m.weighting.base_albedo = albedo;
-    m.weighting.normal = normal;
+    m.weighting.normal = specular_normal;
 
     return m;
 }
