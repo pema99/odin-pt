@@ -112,12 +112,12 @@ float2 ggx_ss_directional_albedo_scale_bias(float roughness, float n_dot_v)
 {
     float r = roughness;
     float m = n_dot_v;
-    float white = 1.018665 + 0.148317 * r - 0.283689 * m - 0.420953 * r * m - 0.651543 * r * r
-        + 0.917850 * m * m - 1.157466 * r * r * m + 0.923874 * r * m * m
-        + 0.494024 * r * r * r - 0.683849 * m * m * m;
+    float white = 1.029460 + 0.176695 * r - 0.323018 * m - 0.423790 * r * m - 0.723949 * r * r
+        + 0.962384 * m * m - 1.160124 * r * r * m + 0.906354 * r * m * m
+        + 0.547459 * r * r * r - 0.680413 * m * m * m;
     float grazing = 1.0 - m;
     float tail = grazing * grazing * grazing * grazing * grazing;
-    float bias = tail * (1.020995 - 2.210220 * r + 1.750230 * m - 1.805618 * r * m + 1.267224 * r * r);
+    float bias = tail * (1.034784 - 2.327367 * r + 1.088382 * m - 1.029448 * r * m + 1.353766 * r * r);
     white = min(white, 1.0);
     bias = min(bias, white);
     return float2(white - bias, bias);
