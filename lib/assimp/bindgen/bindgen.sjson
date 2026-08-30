@@ -1,0 +1,120 @@
+inputs = [
+	"../assimp-6.0.5/include/assimp/aabb.h"
+	"../assimp-6.0.5/include/assimp/anim.h"
+	"../assimp-6.0.5/include/assimp/camera.h"
+	"../assimp-6.0.5/include/assimp/cexport.h"
+	"../assimp-6.0.5/include/assimp/cfileio.h"
+	"../assimp-6.0.5/include/assimp/cimport.h"
+	"../assimp-6.0.5/include/assimp/color4.h"
+	"../assimp-6.0.5/include/assimp/commonMetaData.h"
+	"../assimp-6.0.5/include/assimp/defs.h"
+	"../assimp-6.0.5/include/assimp/importerdesc.h"
+	"../assimp-6.0.5/include/assimp/light.h"
+	"../assimp-6.0.5/include/assimp/material.h"
+	"../assimp-6.0.5/include/assimp/matrix3x3.h"
+	"../assimp-6.0.5/include/assimp/matrix4x4.h"
+	"../assimp-6.0.5/include/assimp/mesh.h"
+	"../assimp-6.0.5/include/assimp/metadata.h"
+	"../assimp-6.0.5/include/assimp/pbrmaterial.h"
+	"../assimp-6.0.5/include/assimp/postprocess.h"
+	"../assimp-6.0.5/include/assimp/quaternion.h"
+	"../assimp-6.0.5/include/assimp/scene.h"
+	"../assimp-6.0.5/include/assimp/texture.h"
+	"../assimp-6.0.5/include/assimp/types.h"
+	"../assimp-6.0.5/include/assimp/vector2.h"
+	"../assimp-6.0.5/include/assimp/vector3.h"
+	"../assimp-6.0.5/include/assimp/version.h"
+]
+output_folder = "assimp"
+package_name = "assimp"
+remove_type_prefix = "ai"
+remove_function_prefix = "ai"
+import_lib = "bin/assimp-vc143-mt.lib"
+clang_include_paths = [
+	"C:/Users/PEMAMA~1/AppData/Local/Temp/claude/D--Projects-odin-pt/8397228a-8c4e-4603-91db-40daffa2dc6b/scratchpad/assimp-6.0.5/include"
+]
+clang_defines = {
+	"INT_MAX" = "2147483647"
+}
+
+struct_field_overrides = {
+	"aiMesh.mPrimitiveTypes" = "PrimitiveType"
+	"aiScene.mFlags" = "bit_set[SceneFlag; u32]"
+	"aiScene.mMeshes" = "[^]"
+	"aiScene.mMaterials" = "[^]"
+	"aiScene.mAnimations" = "[^]"
+	"aiScene.mTextures" = "[^]"
+	"aiScene.mLights" = "[^]"
+	"aiScene.mCameras" = "[^]"
+	"aiScene.mSkeletons" = "[^]"
+	"aiNode.mChildren" = "[^]"
+	"aiNode.mMeshes" = "[^]"
+	"aiMesh.mVertices" = "[^]"
+	"aiMesh.mNormals" = "[^]"
+	"aiMesh.mTangents" = "[^]"
+	"aiMesh.mBitangents" = "[^]"
+	"aiMesh.mBones" = "[^]"
+	"aiMesh.mFaces" = "[^]"
+	"aiMesh.mAnimMeshes" = "[^]"
+	"aiMesh.mColors" = "[8][^]Color4D"
+	"aiMesh.mTextureCoords" = "[8][^]Vector3D"
+	"aiFace.mIndices" = "[^]"
+	"aiBone.mWeights" = "[^]"
+	"aiMaterial.mProperties" = "[^]"
+	"aiAnimation.mChannels" = "[^]"
+	"aiAnimation.mMeshChannels" = "[^]"
+	"aiAnimation.mMorphMeshChannels" = "[^]"
+	"aiMetadata.mKeys" = "[^]"
+	"aiMetadata.mValues" = "[^]"
+	"aiTexture.pcData" = "[^]"
+	"aiSkeleton.mBones" = "[^]"
+}
+
+remove_enum_members = [
+	"_*Force32Bit"
+	"_aiAnimBehaviour_Force32Bit"
+	"_aiAnimInterpolation_Force32Bit"
+	"_aiBlendMode_Force32Bit"
+	"_aiLightSource_Force32Bit"
+	"_aiMorphingMethod_Force32Bit"
+	"_aiPTI_Force32Bit"
+	"_aiShadingMode_Force32Bit"
+	"_aiTextureMapMode_Force32Bit"
+	"_aiTextureMapping_Force32Bit"
+	"_aiTextureOp_Force32Bit"
+	"_aiTextureType_Force32Bit"
+]
+
+remove_enum_member_prefix = {
+	"aiPrimitiveType" = "aiPrimitiveType_"
+
+	"aiReturn" = "aiReturn_"
+	"aiAnimBehaviour" = "aiAnimBehaviour_"
+	"aiAnimInterpolation" = "aiAnimInterpolation_"
+	"aiLightSourceType" = "aiLightSource_"
+	"aiTextureOp" = "aiTextureOp_"
+	"aiBlendMode" = "aiBlendMode_"
+	"aiShadingMode" = "aiShadingMode_"
+	"aiPropertyTypeInfo" = "aiPTI_"
+	"aiMorphingMethod" = "aiMorphingMethod_"
+}
+
+bit_setify = {
+	"aiPostProcessSteps" = "PostProcessStep"
+	"aiPrimitiveType" = "PrimitiveTypeFlag"
+	"aiTextureFlags" = "TextureFlag"
+	"SceneFlags" = "SceneFlag"
+}
+
+enumify_macros = {
+	"AI_SCENE_FLAGS_" = "SceneFlags"
+}
+
+procedure_type_overrides = {
+	"aiImportFile.pFlags" = "PostProcessSteps"
+	"aiImportFileEx.pFlags" = "PostProcessSteps"
+	"aiImportFileExWithProperties.pFlags" = "PostProcessSteps"
+	"aiImportFileFromMemory.pFlags" = "PostProcessSteps"
+	"aiImportFileFromMemoryWithProperties.pFlags" = "PostProcessSteps"
+	"aiApplyPostProcessing.pFlags" = "PostProcessSteps"
+}

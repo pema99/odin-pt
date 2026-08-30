@@ -1,0 +1,57 @@
+package assimp
+
+MATKEY_NAME                         :: "?mat.name"
+MATKEY_TWOSIDED                     :: "$mat.twosided"
+MATKEY_SHADING_MODEL                :: "$mat.shadingm"
+MATKEY_ENABLE_WIREFRAME             :: "$mat.wireframe"
+MATKEY_BLEND_FUNC                   :: "$mat.blend"
+MATKEY_OPACITY                      :: "$mat.opacity"
+MATKEY_TRANSPARENCYFACTOR           :: "$mat.transparencyfactor"
+MATKEY_BUMPSCALING                  :: "$mat.bumpscaling"
+MATKEY_SHININESS                    :: "$mat.shininess"
+MATKEY_REFLECTIVITY                 :: "$mat.reflectivity"
+MATKEY_SHININESS_STRENGTH           :: "$mat.shinpercent"
+MATKEY_REFRACTI                     :: "$mat.refracti"
+MATKEY_COLOR_DIFFUSE                :: "$clr.diffuse"
+MATKEY_COLOR_AMBIENT                :: "$clr.ambient"
+MATKEY_COLOR_SPECULAR               :: "$clr.specular"
+MATKEY_COLOR_EMISSIVE               :: "$clr.emissive"
+MATKEY_COLOR_TRANSPARENT            :: "$clr.transparent"
+MATKEY_COLOR_REFLECTIVE             :: "$clr.reflective"
+MATKEY_GLOBAL_BACKGROUND_IMAGE      :: "?bg.global"
+MATKEY_GLOBAL_SHADERLANG            :: "?sh.lang"
+MATKEY_SHADER_VERTEX                :: "?sh.vs"
+MATKEY_SHADER_FRAGMENT              :: "?sh.fs"
+MATKEY_SHADER_GEO                   :: "?sh.gs"
+MATKEY_SHADER_TESSELATION           :: "?sh.ts"
+MATKEY_SHADER_PRIMITIVE             :: "?sh.ps"
+MATKEY_SHADER_COMPUTE               :: "?sh.cs"
+MATKEY_USE_COLOR_MAP                :: "$mat.useColorMap"
+MATKEY_BASE_COLOR                   :: "$clr.base"
+MATKEY_USE_METALLIC_MAP             :: "$mat.useMetallicMap"
+MATKEY_METALLIC_FACTOR              :: "$mat.metallicFactor"
+MATKEY_USE_ROUGHNESS_MAP            :: "$mat.useRoughnessMap"
+MATKEY_ROUGHNESS_FACTOR             :: "$mat.roughnessFactor"
+MATKEY_ANISOTROPY_FACTOR            :: "$mat.anisotropyFactor"
+MATKEY_SPECULAR_FACTOR              :: "$mat.specularFactor"
+MATKEY_GLOSSINESS_FACTOR            :: "$mat.glossinessFactor"
+MATKEY_SHEEN_COLOR_FACTOR           :: "$clr.sheen.factor"
+MATKEY_SHEEN_ROUGHNESS_FACTOR       :: "$mat.sheen.roughnessFactor"
+MATKEY_CLEARCOAT_FACTOR             :: "$mat.clearcoat.factor"
+MATKEY_CLEARCOAT_ROUGHNESS_FACTOR   :: "$mat.clearcoat.roughnessFactor"
+MATKEY_TRANSMISSION_FACTOR          :: "$mat.transmission.factor"
+MATKEY_VOLUME_THICKNESS_FACTOR      :: "$mat.volume.thicknessFactor"
+MATKEY_VOLUME_ATTENUATION_DISTANCE  :: "$mat.volume.attenuationDistance"
+MATKEY_VOLUME_ATTENUATION_COLOR     :: "$mat.volume.attenuationColor"
+MATKEY_USE_EMISSIVE_MAP             :: "$mat.useEmissiveMap"
+MATKEY_EMISSIVE_INTENSITY           :: "$mat.emissiveIntensity"
+MATKEY_USE_AO_MAP                   :: "$mat.useAOMap"
+MATKEY_ANISOTROPY_ROTATION          :: "$mat.anisotropyRotation"
+
+GetMaterialFloat :: proc "c" (mat: ^Material, key: cstring, type: u32, index: u32, out: ^_real) -> Return {
+	return GetMaterialFloatArray(mat, key, type, index, out, nil)
+}
+
+GetMaterialInteger :: proc "c" (mat: ^Material, key: cstring, type: u32, index: u32, out: ^i32) -> Return {
+	return GetMaterialIntegerArray(mat, key, type, index, out, nil)
+}

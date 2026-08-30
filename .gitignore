@@ -1,0 +1,6 @@
+/bin/
+*.pdb
+*.rdi
+*.obj
+imgui.ini
+.vscode/
