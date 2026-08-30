@@ -93,7 +93,7 @@ void main(uint3 id: SV_DispatchThreadID)
         else
         {
             float3 sky_color = float3(0.8, 0.7, 0.6);
-            color = throughput * sky_color;
+            color += throughput * sky_color;
             break;
         }
     }

@@ -97,13 +97,8 @@ float cook_torrance_reflection(float n_dot_l, float n_dot_v, float n_dot_h, floa
 }
 
 // Microfacet Models for Refraction through Rough Surfaces, Walter et al., 2007, (eq. 20)
-float3 cook_torrance(float3 n, float3 v, float3 l, float3 f0, float alpha)
+float3 cook_torrance(float n_dot_l, float n_dot_v, float n_dot_h, float v_dot_h, float3 f0, float alpha)
 {
-    float3 h = normalize(v + l);
-    float n_dot_l = saturate(dot(n, l));
-    float n_dot_v = max(dot(n, v), 1e-4);
-    float n_dot_h = saturate(dot(n, h));
-    float v_dot_h = saturate(dot(v, h));
     return fresnel_schlick(v_dot_h, f0) * cook_torrance_reflection(n_dot_l, n_dot_v, n_dot_h, alpha);
 }
 
@@ -122,8 +117,8 @@ float2 ggx_ss_directional_albedo_scale_bias(float roughness, float n_dot_v)
     float grazing = 1.0 - m;
     float tail = grazing * grazing * grazing * grazing * grazing;
     float bias = tail * (1.020995 - 2.210220 * r + 1.750230 * m - 1.805618 * r * m + 1.267224 * r * r);
-    white = clamp(white, 1e-3, 1.0);
-    bias = clamp(bias, 0.0, white);
+    white = min(white, 1.0);
+    bias = min(bias, white);
     return float2(white - bias, bias);
 }
 
@@ -132,8 +127,7 @@ float2 ggx_ss_directional_albedo_scale_bias(float roughness, float n_dot_v)
 // https://blog.selfshadow.com/publications/turquin/ms_comp_final.pdf
 float3 turquin_ss_compensation(float3 f0, float white_albedo)
 {
-    float e_white = max(white_albedo, 1e-3);
-    return 1.0 + f0 * (1.0 - e_white) / e_white;
+    return 1.0 + f0 * (1.0 - white_albedo) / white_albedo;
 }
 
 // Directional albedo for GGX lobe, compensated to approximate multiple-scattering, i.e:
@@ -195,12 +189,13 @@ public struct CookTorranceBSDF : BSDF
 
         float alpha = max(roughness * roughness, 1e-3);
         float3 half_vector = normalize(view_direction + sample_direction);
-        float n_dot_h = saturate(dot(normal, half_vector));
+        float n_dot_h = dot(normal, half_vector);
+        float v_dot_h = dot(view_direction, half_vector);
         density = ggx_vndf_pdf(n_dot_v, n_dot_h, alpha);
 
         float2 ab = ggx_ss_directional_albedo_scale_bias(roughness, n_dot_v);
         value_times_cosine = turquin_ss_compensation(f0, 1.0 * ab.x + ab.y)
-             * cook_torrance(normal, view_direction, sample_direction, f0, alpha) * n_dot_l;
+             * cook_torrance(n_dot_l, n_dot_v, n_dot_h, v_dot_h, f0, alpha) * n_dot_l;
     }
 
     public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
@@ -445,7 +440,7 @@ public struct GlassBSDF : BSDF
         float3 local_half = sample_ggx_vndf(local_view, alpha, random_sample.x, random_sample.y);
 
         // Choose reflection vs refraction with fresnel
-        float reflection_probability = fresnel_dielectric(saturate(dot(local_view, local_half)), eta);
+        float reflection_probability = fresnel_dielectric(dot(local_view, local_half), eta);
         float3 local_sample;
         if (frac(random_sample.x * 1024.0) < reflection_probability) // reuse rng
         {
@@ -455,10 +450,6 @@ public struct GlassBSDF : BSDF
         {
             // Walter et al., 2007, (eq. 40)
             local_sample = refract(-local_view, local_half, 1.0 / eta);
-
-            // total internal reflection
-            if (all(local_sample == 0.0)) 
-                local_sample = reflect(-local_view, local_half);
         }
         sample_direction = mul(basis, local_sample);
         evaluate(view_direction, sample_direction, value_times_cosine, density);
