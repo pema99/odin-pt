@@ -347,4 +347,5 @@ scene_delete :: proc(scene: ^Scene)  {
     delete(scene.instances)
     gp_delete(&scene.geometry_pool)
     mp_delete(&scene.material_pool)
+    scene^ = {}
 }

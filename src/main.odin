@@ -4,28 +4,14 @@ import "core:strings"
 import "core:os"
 import "core:fmt"
 import "core:log"
+import "core:time"
 import "core:math"
 import "core:math/linalg"
 
 import "vendor:glfw"
-
-import "gpu"
-
 import imgui "lib:imgui"
 
-// Constants
-WIDTH : u32 : 1280
-HEIGHT : u32 : 720
-
-// Globals
-max_bounces : i32 = 20
-fov : f32 = 60.0
-
-Camera :: struct {
-	pos:   [3]f32,
-	yaw:   f32,
-	pitch: f32,
-}
+import "gpu"
 
 // TODO:
 // - Region for copytexture/copybuffer commands
@@ -40,9 +26,42 @@ Camera :: struct {
 // - NEE + MIS
 // - Many lights
 // - Russian roulette
-main :: proc() {
-	context.logger = log.create_console_logger()
-	defer log.destroy_console_logger(context.logger)
+
+// Constants
+WIDTH : u32 : 1280
+HEIGHT : u32 : 720
+
+App_State :: struct {
+    // Settings
+    max_bounces: i32,
+    fov: f32,
+
+    // GPU state
+    cmd: ^gpu.Cmd,
+    trace: gpu.Shader,
+    output: gpu.Texture,
+    kernel_size: [3]u32,
+    num_groups: [2]u32,
+
+    // Frame state
+    cam: Camera,
+    last_mouse: [2]f64,
+    last_time: f64,
+    frame: u32,
+    sample_count: u32,
+
+    // Select scene, and hot reload
+    last_shader_write: time.Time,
+    shader_path: string,
+    last_scene_write: time.Time,
+    scene_index: i32,
+    scene_names: [dynamic]cstring,
+    scene: Scene,
+}
+app: App_State
+
+app_init :: proc() -> App_State {
+    context.logger = log.create_console_logger()
 
 	gpu.init(
         title = "Odin Path Tracer", 
@@ -51,111 +70,168 @@ main :: proc() {
         use_imgui = true,
         vsync = false,
         validation = ODIN_DEBUG)
-	defer gpu.cleanup()
 
-    shader_path := "shaders/megakernel.slang"
-    last_shader_write, _ := os.last_write_time_by_name(shader_path)
-	trace := gpu.compile_shader(shader_path)
-	defer gpu.destroy_shader(trace)
+    state := App_State{
+        max_bounces = 20,
+        fov = 60.0,
+        scene_index = 0,
+        scene_names = [dynamic]cstring{},
+        shader_path = "shaders/megakernel.slang",
+        cam = Camera{pos = {3, 2.5, 3}, yaw = -0.55, pitch = -0.35},
+    }
 
-	output := gpu.create_texture(WIDTH, HEIGHT, .R32G32B32A32_SFLOAT, writable = true)
-	defer gpu.destroy_texture(output)
-
-	cmd := gpu.create_cmd()
-	defer gpu.destroy_cmd(cmd)
-
-    scene_path := "assets/splash.glb"
-    last_scene_write, _ := os.last_write_time_by_name(scene_path)
-    load_cmd := gpu.create_cmd()
-    scene := scene_load(strings.unsafe_string_to_cstring(scene_path), load_cmd)
-    defer scene_delete(&scene)
-	gpu.execute_cmd(load_cmd)
-	gpu.destroy_cmd(load_cmd)
-
-	cam := Camera{pos = {3, 2.5, 3}, yaw = -0.55, pitch = -0.35}
-	last_mouse: [2]f64
-	last_mouse.x, last_mouse.y = glfw.GetCursorPos(gpu.get_window())
-	last_time := glfw.GetTime()
-
-	kernel_size := gpu.get_kernel_size(trace, "main")
-	num_groups := ([2]u32{WIDTH, HEIGHT} + kernel_size.xy - 1) / kernel_size.xy
-
-    sample_count: u32 = 0
-	for frame: u32 = 0; gpu.is_running(); frame += 1 {
-		gpu.start_frame()
-
-        now := glfw.GetTime()
-        delta_time := min(f32(now - last_time), 0.1)
-        last_time = now
-
-        reset := update_camera(&cam, &last_mouse, delta_time)
-
-		reset |= do_gui()
-        if reset {
-            sample_count = 0
+    f, _ := os.open("assets")
+    defer os.close(f)
+    fis, _ := os.read_dir(f, -1, context.allocator)
+    defer os.file_info_slice_delete(fis, context.allocator)
+    for i := 0; i < len(fis); i += 1 {
+        if !strings.ends_with(fis[i].name, ".glb") {
+            continue
         }
+        if strings.starts_with(fis[i].name, "splash") {
+            state.scene_index = i32(len(state.scene_names))
+        }
+        append(&state.scene_names, strings.clone_to_cstring(fis[i].name))
+    }
 
-		gpu.reset_cmd(cmd)
-		gpu.begin_profile(cmd, "frame")
+    if len(state.scene_names) == 0 {
+        panic("no .glb files found in assets/")
+    }
 
-		gpu.set_cbuffer(cmd, trace, "main", "Camera", &cam)
-		gpu.set_uniform(cmd, trace, "main", "screen_size", [2]u32{output.width, output.height})
-		gpu.set_uniform(cmd, trace, "main", "frame", frame)
-        gpu.set_uniform(cmd, trace, "main", "sample_count", sample_count)
-        gpu.set_uniform(cmd, trace, "main", "max_bounces", max_bounces)
-        gpu.set_uniform(cmd, trace, "main", "fov", fov)
-		gpu.set_tlas(cmd, trace, "main", "scene", scene.tlas)
+    app_load_scene(&state, state.scene_index)
+    if state.scene.tlas.handle == 0 {
+        panic("failed to load initial scene")
+    }
+
+    state.cmd = gpu.create_cmd()
+    state.last_shader_write, _ = os.last_write_time_by_name(state.shader_path)
+    trace, trace_ok := gpu.compile_shader(state.shader_path)
+    if !trace_ok {
+        panic("failed to compile shaders/megakernel.slang")
+    }
+    state.trace = trace
+    state.output = gpu.create_texture(WIDTH, HEIGHT, .R32G32B32A32_SFLOAT, writable = true)
+    state.kernel_size = gpu.get_kernel_size(state.trace, "main")
+    state.num_groups = ([2]u32{WIDTH, HEIGHT} + state.kernel_size.xy - 1) / state.kernel_size.xy
+
+    state.last_mouse.x, state.last_mouse.y = glfw.GetCursorPos(gpu.get_window())
+    state.last_time = glfw.GetTime()
+
+    return state
+}
+
+app_load_scene :: proc(state: ^App_State, index: i32) {
+    state.scene_index = index
+    scene_path := fmt.tprintf("assets/%s", state.scene_names[index])
+    state.last_scene_write, _ = os.last_write_time_by_name(scene_path)
+
+    load_cmd := gpu.create_cmd()
+    defer gpu.destroy_cmd(load_cmd)
+    scene, ok := scene_load(strings.unsafe_string_to_cstring(scene_path), load_cmd)
+    if !ok {
+        log.errorf("failed to load %s", scene_path)
+        return
+    }
+    gpu.execute_cmd(load_cmd)
+
+    if state.scene.tlas.handle != 0 {
+        scene_delete(&state.scene)
+    }
+    state.scene = scene
+    state.sample_count = 0
+}
+
+app_tick :: proc(state: ^App_State) {
+    defer free_all(context.temp_allocator)
+
+    app_do_frame(state)
+
+    // Handle resize
+    framebuffer_width, framebuffer_height := glfw.GetFramebufferSize(gpu.get_window())
+    if framebuffer_width > 0 && framebuffer_height > 0 && (u32(framebuffer_width) != state.output.width || u32(framebuffer_height) != state.output.height) {
+        gpu.destroy_texture(state.output)
+        state.output = gpu.create_texture(u32(framebuffer_width), u32(framebuffer_height), .R32G32B32A32_SFLOAT, writable = true)
+        state.num_groups = ([2]u32{u32(framebuffer_width), u32(framebuffer_height)} + state.kernel_size.xy - 1) / state.kernel_size.xy
+        state.sample_count = 0
+    }
+
+    // Reload scene if anything changed
+    scene_path := fmt.tprintf("assets/%s", state.scene_names[state.scene_index])
+    last_scene_write, _ := os.last_write_time_by_name(scene_path)
+    if last_scene_write != state.last_scene_write {
+        app_load_scene(state, state.scene_index)
+    }
+    curr_shader_write, _ := os.last_write_time_by_name(state.shader_path)
+    if curr_shader_write != state.last_shader_write {
+        state.last_shader_write = curr_shader_write
+        if new_trace, ok := gpu.compile_shader(state.shader_path); ok {
+            gpu.destroy_shader(state.trace)
+            state.trace = new_trace
+            state.kernel_size = gpu.get_kernel_size(state.trace, "main")
+            state.num_groups = ([2]u32{state.output.width, state.output.height} + state.kernel_size.xy - 1) / state.kernel_size.xy
+            state.sample_count = 0
+        }
+    }
+}
+
+app_do_frame :: proc(state: ^App_State) {
+    now := glfw.GetTime()
+    delta_time := min(f32(now - state.last_time), 0.1)
+    state.last_time = now
+    reset := app_update_camera(&state.cam, &state.last_mouse, delta_time)
+
+    cmd := state.cmd
+    trace := state.trace
+
+    gpu.start_frame()
+
+        reset |= app_do_gui(state)
+        if reset {
+            state.sample_count = 0
+        }
+        
+        scene := state.scene
+        gpu.reset_cmd(cmd)
+        gpu.begin_profile(cmd, "frame")
+
+        gpu.set_cbuffer(cmd, trace, "main", "Camera", &state.cam)
+        gpu.set_uniform(cmd, trace, "main", "screen_size", [2]u32{state.output.width, state.output.height})
+        gpu.set_uniform(cmd, trace, "main", "frame", state.frame)
+        gpu.set_uniform(cmd, trace, "main", "sample_count", state.sample_count)
+        gpu.set_uniform(cmd, trace, "main", "max_bounces", state.max_bounces)
+        gpu.set_uniform(cmd, trace, "main", "fov", state.fov)
+
+        gpu.set_tlas(cmd, trace, "main", "scene", scene.tlas)
         gpu.set_buffer(cmd, trace, "main", "instance_to_pool", scene.geometry_pool.instance_to_pool.buffer)
-		gpu.set_buffer(cmd, trace, "main", "positions", scene.geometry_pool.vertices.buffer)
+        gpu.set_buffer(cmd, trace, "main", "positions", scene.geometry_pool.vertices.buffer)
         gpu.set_buffer(cmd, trace, "main", "normals", scene.geometry_pool.normals.buffer)
         gpu.set_buffer(cmd, trace, "main", "tangents", scene.geometry_pool.tangents.buffer)
         gpu.set_buffer(cmd, trace, "main", "uvs", scene.geometry_pool.uvs.buffer)
-		gpu.set_buffer(cmd, trace, "main", "indices", scene.geometry_pool.indices.buffer)
+        gpu.set_buffer(cmd, trace, "main", "indices", scene.geometry_pool.indices.buffer)
         gpu.set_buffer(cmd, trace, "main", "materials", scene.material_pool.materials.buffer)
-		gpu.set_texture_array(cmd, trace, "main", "textures", scene.material_pool.textures)
-        gpu.set_texture(cmd, trace, "main", "image", output)
-		gpu.dispatch(cmd, trace, "main", num_groups.x, num_groups.y)
+        gpu.set_texture_array(cmd, trace, "main", "textures", scene.material_pool.textures)
+        gpu.set_texture(cmd, trace, "main", "image", state.output)
+        gpu.dispatch(cmd, trace, "main", state.num_groups.x, state.num_groups.y)
 
-		gpu.end_profile(cmd)
-		gpu.execute_cmd(cmd)
-		gpu.end_frame(output)
+        gpu.end_profile(cmd)
+        gpu.execute_cmd(cmd)
+        
+    gpu.end_frame(state.output)
 
-        sample_count += 1
-
-        // Handle resize
-        framebuffer_width, framebuffer_height := glfw.GetFramebufferSize(gpu.get_window())
-        if framebuffer_width > 0 && framebuffer_height > 0 && (u32(framebuffer_width) != output.width || u32(framebuffer_height) != output.height) {
-            gpu.destroy_texture(output)
-            output = gpu.create_texture(u32(framebuffer_width), u32(framebuffer_height), .R32G32B32A32_SFLOAT, writable = true)
-            num_groups = ([2]u32{u32(framebuffer_width), u32(framebuffer_height)} + kernel_size.xy - 1) / kernel_size.xy
-            sample_count = 0
-        }
-
-        // Reload scene if anything changed
-        curr_scene_write, _ := os.last_write_time_by_name(scene_path)
-        if curr_scene_write != last_scene_write {
-            last_scene_write = curr_scene_write
-            scene_delete(&scene)
-            reload_cmd := gpu.create_cmd()
-            scene = scene_load(strings.unsafe_string_to_cstring(scene_path), reload_cmd)
-            gpu.execute_cmd(reload_cmd)
-            gpu.destroy_cmd(reload_cmd)
-        }
-        curr_shader_write, _ := os.last_write_time_by_name(shader_path)
-        if curr_shader_write != last_shader_write {
-            last_shader_write = curr_shader_write
-            gpu.destroy_shader(trace)
-            trace = gpu.compile_shader(shader_path)
-        }
-	}
+    state.sample_count += 1
+    state.frame += 1
 }
 
-do_gui :: proc() -> bool {
+app_do_gui :: proc(state: ^App_State) -> bool {
     imgui.Begin("Settings")
 
     // Main UI
-    changed := imgui.SliderInt("Max Bounces", &max_bounces, 1, 40)
-    changed |= imgui.SliderFloat("FOV", &fov, 10.0, 120.0)
+    changed := imgui.SliderInt("Max Bounces", &state.max_bounces, 1, 40)
+    changed |= imgui.SliderFloat("FOV", &state.fov, 10.0, 120.0)
+    if imgui.ComboChar("Scene", &state.scene_index, raw_data(state.scene_names[:]), i32(len(state.scene_names))) {
+        app_load_scene(state, state.scene_index)
+        changed = true
+    }
 
     // Stats
     frame_time := gpu.get_profile_time("frame")
@@ -166,7 +242,26 @@ do_gui :: proc() -> bool {
     return changed
 }
 
-update_camera :: proc(c: ^Camera, last_mouse: ^[2]f64, delta_time: f32) -> bool {
+app_delete :: proc(state: ^App_State) {
+    scene_delete(&state.scene)
+    gpu.destroy_texture(state.output)
+    gpu.destroy_shader(state.trace)
+    gpu.destroy_cmd(state.cmd)
+    for i := 0; i < len(state.scene_names); i += 1 {
+        delete(state.scene_names[i])
+    }
+    delete(state.scene_names)
+    gpu.cleanup()
+    log.destroy_console_logger(context.logger)
+}
+
+Camera :: struct {
+	pos:   [3]f32,
+	yaw:   f32,
+	pitch: f32,
+}
+
+app_update_camera :: proc(c: ^Camera, last_mouse: ^[2]f64, delta_time: f32) -> bool {
 	reset := false
     io := imgui.GetIO()
 	window := gpu.get_window()
@@ -196,4 +291,13 @@ update_camera :: proc(c: ^Camera, last_mouse: ^[2]f64, delta_time: f32) -> bool 
         reset = true
     }
     return reset
+}
+
+main :: proc() {
+    app = app_init()
+    defer app_delete(&app)
+
+    for gpu.is_running() {
+        app_tick(&app)
+    }
 }
