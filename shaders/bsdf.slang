@@ -139,6 +139,17 @@ float3 ggx_ms_directional_albedo(float3 f0, float roughness, float n_dot_v)
     return saturate((f0 * ab.x + ab.y) * turquin_ss_compensation(f0, 1.0 * ab.x + ab.y));
 }
 
+// Same as ggx_ms_directional_albedo but averaged over all view directions, i.e:
+// E_avg(f0) = 2 ∫_0^1 E(μ, f0) μ dμ    where μ = dot(n, v)
+float3 ggx_ms_average_albedo(float3 f0, float roughness)
+{
+    float r = roughness;
+    float c0 = 0.062232 - 0.123081 * r + 0.064461 * r * r;
+    float c1 = 0.930937 + r * (0.236909 + r * (-0.055513 + r * (-1.828272 + r * 1.143570)));
+    float c2 = 0.006831 + r * (-0.113828 + r * (-0.008948 + r * (1.828266 + r * -1.143568)));
+    return saturate(c0 + f0 * (c1 + f0 * c2));
+}
+
 // Sampling the GGX Distribution of Visible Normals, Heitz, 2018, (lst. 1)
 float3 sample_ggx_vndf(float3 v, float alpha, float u1, float u2)
 {
@@ -319,6 +330,8 @@ public struct CoatingWeights : BSDFMixWeights
         float3 transmitted_sample = 1.0 - ggx_ms_directional_albedo(f0, roughness, n_dot_l);
         out_a = float3(1.0);
         out_b = base_weight * min(transmitted_view, transmitted_sample);
+        // TODO: Use ggx_ms_average_albedo over Kulla-Conty's "min weight" trick.
+        //       Only works if we assume base layer is lambertian!
     }
 
     // Crash Course in BRDF Implementation, section 5 "Combining BRDFs", pick lobe based on estimated energy.
