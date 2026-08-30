@@ -83,7 +83,8 @@ float smith_ggx_geom(float n_dot_l, float n_dot_v, float alpha)
 // https://en.wikipedia.org/wiki/Schlick's_approximation
 float3 fresnel_schlick(float v_dot_h, float3 f0)
 {
-    float f = pow(1.0 - v_dot_h, 5.0);
+    float m = 1.0 - v_dot_h;
+    float f = m * m * m * m * m;
     return f0 + (1.0 - f0) * f;
 }
 
@@ -392,17 +393,20 @@ public struct GlassBSDF : BSDF
 
         float3 half_vector;
         if (is_reflection)
+        {
             half_vector = normalize(view_direction + sample_direction);
+        }
         else
+        {
             half_vector = -normalize(view_direction + eta * sample_direction);
+            if (dot(half_vector, normal) < 0.0)
+                half_vector = -half_vector;
+        }
 
-        if (dot(half_vector, normal) < 0.0)
-            half_vector = -half_vector;
-
-        float n_dot_h = saturate(dot(normal, half_vector));
+        float n_dot_h = dot(normal, half_vector);
         float v_dot_h = dot(view_direction, half_vector);
         float l_dot_h = dot(sample_direction, half_vector);
-        if (v_dot_h <= 0.0 || (is_reflection ? l_dot_h <= 0.0 : l_dot_h >= 0.0))
+        if (!is_reflection && (v_dot_h <= 0.0 || l_dot_h >= 0.0))
             return;
 
         // Must match probability in sample()
