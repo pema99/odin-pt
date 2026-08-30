@@ -452,7 +452,6 @@ public struct GlassBSDF : BSDF
         }
         else
         {
-            // Walter et al., 2007, (eq. 40)
             local_sample = refract(-local_view, local_half, 1.0 / eta);
         }
         sample_direction = mul(basis, local_sample);
