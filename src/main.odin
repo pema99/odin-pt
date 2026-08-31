@@ -41,7 +41,6 @@ Camera :: struct {
 Spectral_Mode :: enum u32 {
     RGB = 0,
     Spectral = 1,
-    SpectralForGlassOnly = 2,
 }
 
 // Helpers
@@ -252,10 +251,9 @@ app_do_gui :: proc(state: ^App_State) -> bool {
     changed := imgui.SliderInt("Max Bounces", &state.max_bounces, 1, 40)
     changed |= imgui.SliderFloat("FOV", &state.fov, 10.0, 120.0)
 
-    spectral_mode_names := [?]cstring{"RGB", "Spectral", "Spectral (Glass Only)"}
-    spectral_mode_index := i32(state.spectral_mode)
-    if imgui.ComboChar("Spectral Mode", &spectral_mode_index, raw_data(spectral_mode_names[:]), i32(len(spectral_mode_names))) {
-        state.spectral_mode = Spectral_Mode(spectral_mode_index)
+    spectral := state.spectral_mode == .Spectral
+    if imgui.Checkbox("Spectral", &spectral) {
+        state.spectral_mode = spectral ? .Spectral : .RGB
         changed = true
     }
     

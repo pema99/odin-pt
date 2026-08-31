@@ -8,7 +8,6 @@ public enum SpectralMode
 {
     RGB = 0,
     Spectral = 1,
-    SpectralForGlassOnly = 2,
 }
 
 
