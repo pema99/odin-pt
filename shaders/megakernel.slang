@@ -66,7 +66,7 @@ void main(uint3 id: SV_DispatchThreadID)
     float4 throughput = 1;
 
     float4 wavelengths = 0;
-    SpectrumBasis spectrum_basis;
+    SpectrumBasis spectrum_basis = SpectrumBasis();
     if (spectral_mode != SpectralMode.RGB)
     {
         wavelengths = sample_wavelengths(kronecker_2d(id.xy, frame, RNG_DIM_WAVELENGTH).x);

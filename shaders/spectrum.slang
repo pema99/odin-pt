@@ -83,11 +83,20 @@ public struct SpectrumBasis
 {
     // The spectral primaries evaluated at the sampled wavelengths.
     // "How much light does each primary reflect at this wavelength"
-    float3 primaries[4];
+    public float3 primaries[4];
 
     // CIE matching functions evaluated at the sampled wavelengths.
     // "How much does a unit of light at this wavelength contribute to X,Y,Z"
-    float3 xyz[4];
+    public float3 xyz[4];
+
+    public __init()
+    {
+        for (int i = 0; i < 4; ++i)
+        {
+            primaries[i] = 0;
+            xyz[i] = 0;
+        }
+    }
 }
 
 // tools/fit_rgb_to_spectrum_upsample.py
