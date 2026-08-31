@@ -3,6 +3,7 @@ module material;
 import bsdf;
 import raytracing;
 import common;
+import spectrum;
 
 public struct MaterialInfo
 {
@@ -11,6 +12,7 @@ public struct MaterialInfo
     public float metallic;
     public float roughness;
     public float index_of_refraction;
+    public float dispersion;
     public uint albedo_texture_index;
     public uint emission_texture_index;
     public uint metallic_texture_index;
@@ -53,14 +55,19 @@ public MaterialInfo get_material(inout HitAttributes attributes)
     return mat;
 }
 
-public BSDF get_material_bsdf(MaterialInfo mat, bool entering, float3 normal, float3 specular_normal)
+public BSDF get_material_bsdf(MaterialInfo mat, SpectrumBasis spectrum_basis, bool entering, float3 normal, float3 specular_normal)
 {
-    BSDF bsdf = make_disney_bsdf(mat.albedo, mat.metallic, mat.roughness, mat.index_of_refraction, normal, specular_normal);
+    float4 albedo_spectrum = upsample_rgb(mat.albedo, spectrum_basis);
+
+    BSDF bsdf = make_disney_bsdf(albedo_spectrum, mat.metallic, mat.roughness, mat.index_of_refraction, normal, specular_normal);
     if (mat.bsdf_type == BSDFType::Glass)
     {
-        bsdf = GlassBSDF(mat.roughness, mat.albedo, entering 
-            ? mat.index_of_refraction
-            : 1.0 / mat.index_of_refraction, specular_normal);
+        float4 ior;
+        if (spectral_mode == SpectralMode::RGB)
+            ior = mat.index_of_refraction;
+        else
+            ior = dispersive_ior(mat.index_of_refraction, mat.dispersion, spectrum_basis.wavelengths);
+        bsdf = GlassBSDF(mat.roughness, albedo_spectrum, entering ? ior[0] : rcp(ior[0]), specular_normal);
     }
     return bsdf;
 }

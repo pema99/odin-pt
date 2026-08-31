@@ -2,9 +2,102 @@ module spectrum;
 
 import common;
 
-public static const float MIN_VISIBLE_WAVELENGTH = 380.0;
-public static const float MAX_VISIBLE_WAVELENGTH = 780.0;
-public static const float VISIBLE_WAVELENGTH_RANGE = MAX_VISIBLE_WAVELENGTH - MIN_VISIBLE_WAVELENGTH;
+// === Public API ===
+
+public enum SpectralMode
+{
+    RGB = 0,
+    Spectral = 1,
+    SpectralForGlassOnly = 2,
+}
+
+public uniform SpectralMode spectral_mode;
+
+// RGB -> Spectrum or RGB
+public float4 upsample_rgb(float3 rgb, SpectrumBasis basis)
+{
+    if (spectral_mode == SpectralMode.RGB)
+        return float4(rgb, 0.0);
+    return rgb_to_spectrum(rgb, basis);
+}
+
+// Spectrum or RGB -> linear rgb monte carlo sample
+public float3 resolve_spectrum(float4 values, float4 density_to_hero_ratio, SpectrumBasis basis)
+{
+    if (spectral_mode == SpectralMode.RGB)
+        return values.rgb;
+    float monte_carlo_normalization = VISIBLE_WAVELENGTH_RANGE / dot(density_to_hero_ratio, 1);
+    return xyz_to_ergb(spectrum_to_xyz(values, basis) * monte_carlo_normalization);
+}
+
+// See tools/fit_rgb_to_spectrum_upsample.py
+public SpectrumBasis get_spectrum_basis(float4 wavelengths)
+{
+    float4 normalize_wavelengths = (wavelengths - MIN_VISIBLE_WAVELENGTH) / VISIBLE_WAVELENGTH_RANGE;
+    float4 position = normalize_wavelengths * (RGB_TO_SPECTRUM_LUT_SIZE - 1);
+    int4 index = min(int4(position), RGB_TO_SPECTRUM_LUT_SIZE - 2);
+    float4 fraction = position - float4(index);
+    SpectrumBasis basis;
+    basis.wavelengths = wavelengths;
+    basis.primaries[0] = lerp(RGB_TO_SPECTRUM_LUT[index.x], RGB_TO_SPECTRUM_LUT[index.x + 1], fraction.x);
+    basis.primaries[1] = lerp(RGB_TO_SPECTRUM_LUT[index.y], RGB_TO_SPECTRUM_LUT[index.y + 1], fraction.y);
+    basis.primaries[2] = lerp(RGB_TO_SPECTRUM_LUT[index.z], RGB_TO_SPECTRUM_LUT[index.z + 1], fraction.z);
+    basis.primaries[3] = lerp(RGB_TO_SPECTRUM_LUT[index.w], RGB_TO_SPECTRUM_LUT[index.w + 1], fraction.w);
+    cie_matching(wavelengths, basis.xyz[0], basis.xyz[1], basis.xyz[2], basis.xyz[3]);
+    return basis;
+}
+
+// Cheap approximation of rgb_to_spectrum using 3 gaussians
+public SpectrumBasis get_spectrum_basis_gaussian(float4 wavelengths)
+{
+    float4 tr = (wavelengths - 671.6054) / 26.5297;
+    float4 tg = (wavelengths - 508.8906) / 26.5518;
+    float4 tb = (wavelengths - 442.8418) / 43.3015;
+    float4 r = exp(-tr * tr);
+    float4 g = exp(-tg * tg);
+    float4 b = exp(-tb * tb);
+    float4 weight = rcp(r + g + b);
+    SpectrumBasis basis;
+    basis.wavelengths = wavelengths;
+    basis.primaries[0] = float3(r.x, g.x, b.x) * weight.x;
+    basis.primaries[1] = float3(r.y, g.y, b.y) * weight.y;
+    basis.primaries[2] = float3(r.z, g.z, b.z) * weight.z;
+    basis.primaries[3] = float3(r.w, g.w, b.w) * weight.w;
+    cie_matching(wavelengths, basis.xyz[0], basis.xyz[1], basis.xyz[2], basis.xyz[3]);
+    return basis;
+}
+
+// Sample 1 "hero" wavelength and 3 additional evenly spaced wavelengths
+// Hero Wavelength Spectral Sampling, Wilkie et al, 2014, (eq. 5)
+// https://cgg.mff.cuni.cz/wp-content/uploads/2021/05/WNDWH14HWSS.pdf
+public float4 sample_wavelengths(float rng)
+{
+    float min_w = MIN_VISIBLE_WAVELENGTH;
+    float range = VISIBLE_WAVELENGTH_RANGE;
+
+    float hero_wavelength = min_w + rng * range;
+
+    return float4(
+        hero_wavelength,
+        min_w + ((hero_wavelength - min_w + 1 * range / 4) % range),
+        min_w + ((hero_wavelength - min_w + 2 * range / 4) % range),
+        min_w + ((hero_wavelength - min_w + 3 * range / 4) % range));
+}
+
+// Dispersive IOR using the convention defined by glTF spec:
+// https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_dispersion#overview
+public float4 dispersive_ior(float ior, float dispersion, float4 wavelengths)
+{
+    // glTF defines dispersion such that 1/abbe_number = dispersion/20
+    float rcp_abbe_number = dispersion / 20.0;
+    return max(ior + (ior - 1.0) * rcp_abbe_number * (523655 / (wavelengths * wavelengths) - 1.5168), 1.0);
+}
+
+// === Helpers ===
+
+static const float MIN_VISIBLE_WAVELENGTH = 380.0;
+static const float MAX_VISIBLE_WAVELENGTH = 780.0;
+static const float VISIBLE_WAVELENGTH_RANGE = MAX_VISIBLE_WAVELENGTH - MIN_VISIBLE_WAVELENGTH;
 
 // Integral of CIE matching functions (the ones below) over the visible spectrum (as defined above)
 // tools/integrate_cie_matching.py
@@ -36,7 +129,7 @@ float4 cie_z_matching(float4 wavelengths)
 // Wavelength -> CIE XYZ tristimulus values
 // Simple Analytic Approximations to the CIE XYZ Color Matching Functions, Wyman et al, 2013
 // https://jcgt.org/published/0002/02/01/
-public void cie_matching(float4 wavelengths,
+void cie_matching(float4 wavelengths,
     out float3 xyz_0, out float3 xyz_1,
     out float3 xyz_2, out float3 xyz_3)
 {
@@ -52,7 +145,7 @@ public void cie_matching(float4 wavelengths,
 // CIE XYZ -> linear sRGB, but scaled such that XYZ (1,1,1) = sRGB (1,1,1). Same primaries.
 // White point is illuminant E (https://en.wikipedia.org/wiki/Standard_illuminant#Illuminant_E)
 // https://github.com/mmp/pbrt-v4/blob/master/src/pbrt/cmd/rgb2spec_opt.cpp#L205
-public float3 xyz_to_ergb(float3 xyz)
+float3 xyz_to_ergb(float3 xyz)
 {
     float3 rgb;
     rgb.r = dot(float3( 2.689989, -1.276020, -0.413844), xyz);
@@ -61,26 +154,12 @@ public float3 xyz_to_ergb(float3 xyz)
     return rgb;
 }
 
-// Sample 1 "hero" wavelength and 3 additional evenly spaced wavelengths
-// Hero Wavelength Spectral Sampling, Wilkie et al, 2014, (eq. 5)
-// https://cgg.mff.cuni.cz/wp-content/uploads/2021/05/WNDWH14HWSS.pdf
-public float4 sample_wavelengths(float rng)
-{
-    float min_w = MIN_VISIBLE_WAVELENGTH;
-    float range = VISIBLE_WAVELENGTH_RANGE;
-
-    float hero_wavelength = min_w + rng * range;
-
-    return float4(
-        hero_wavelength,
-        min_w + ((hero_wavelength - min_w + 1 * range / 4) % range),
-        min_w + ((hero_wavelength - min_w + 2 * range / 4) % range),
-        min_w + ((hero_wavelength - min_w + 3 * range / 4) % range));
-}
-
 // cache some stuff so we can build it once per path..
 public struct SpectrumBasis
 {
+    // The sampled wavelengths
+    public float4 wavelengths;
+
     // The spectral primaries evaluated at the sampled wavelengths.
     // "How much light does each primary reflect at this wavelength"
     public float3 primaries[4];
@@ -91,6 +170,7 @@ public struct SpectrumBasis
 
     public __init()
     {
+        wavelengths = 0;
         for (int i = 0; i < 4; ++i)
         {
             primaries[i] = 0;
@@ -99,9 +179,24 @@ public struct SpectrumBasis
     }
 }
 
+// Given an RGB color, how much light is reflected at each of the sampled wavelengths?
+float4 rgb_to_spectrum(float3 rgb, SpectrumBasis basis)
+{
+    return float4(dot(rgb, basis.primaries[0]), dot(rgb, basis.primaries[1]),
+                  dot(rgb, basis.primaries[2]), dot(rgb, basis.primaries[3]));
+}
+
+// Spectrum to CIE XYZ tristimulus values at the sampled wavelengths.
+// https://en.wikipedia.org/wiki/CIE_1931_color_space#Analytical_approximation
+float3 spectrum_to_xyz(float4 values, SpectrumBasis basis)
+{
+    return values.x * basis.xyz[0] + values.y * basis.xyz[1] +
+           values.z * basis.xyz[2] + values.w * basis.xyz[3];
+}
+
 // tools/fit_rgb_to_spectrum_upsample.py
-public static const int RGB_TO_SPECTRUM_LUT_SIZE = 81;
-public static const float3 RGB_TO_SPECTRUM_LUT[RGB_TO_SPECTRUM_LUT_SIZE] = {
+static const int RGB_TO_SPECTRUM_LUT_SIZE = 81;
+static const float3 RGB_TO_SPECTRUM_LUT[RGB_TO_SPECTRUM_LUT_SIZE] = {
     float3(0.000000, 0.000000, 1.000000), float3(0.000000, 0.000000, 1.000000),
     float3(0.000000, 0.027893, 0.972107), float3(0.000000, 0.110509, 0.889491),
     float3(0.156819, 0.036305, 0.806875), float3(0.275741, 0.000000, 0.724259),
@@ -144,52 +239,3 @@ public static const float3 RGB_TO_SPECTRUM_LUT[RGB_TO_SPECTRUM_LUT_SIZE] = {
     float3(0.000000, 1.000000, 0.000000), float3(0.000000, 1.000000, 0.000000),
     float3(0.000000, 1.000000, 0.000000),
 };
-
-public SpectrumBasis get_spectrum_basis(float4 wavelengths)
-{
-    float4 normalize_wavelengths = (wavelengths - MIN_VISIBLE_WAVELENGTH) / VISIBLE_WAVELENGTH_RANGE;
-    float4 position = normalize_wavelengths * (RGB_TO_SPECTRUM_LUT_SIZE - 1);
-    int4 index = min(int4(position), RGB_TO_SPECTRUM_LUT_SIZE - 2);
-    float4 fraction = position - float4(index);
-    SpectrumBasis basis;
-    basis.primaries[0] = lerp(RGB_TO_SPECTRUM_LUT[index.x], RGB_TO_SPECTRUM_LUT[index.x + 1], fraction.x);
-    basis.primaries[1] = lerp(RGB_TO_SPECTRUM_LUT[index.y], RGB_TO_SPECTRUM_LUT[index.y + 1], fraction.y);
-    basis.primaries[2] = lerp(RGB_TO_SPECTRUM_LUT[index.z], RGB_TO_SPECTRUM_LUT[index.z + 1], fraction.z);
-    basis.primaries[3] = lerp(RGB_TO_SPECTRUM_LUT[index.w], RGB_TO_SPECTRUM_LUT[index.w + 1], fraction.w);
-    cie_matching(wavelengths, basis.xyz[0], basis.xyz[1], basis.xyz[2], basis.xyz[3]);
-    return basis;
-}
-
-// Cheap approximation of rgb_to_spectrum using 3 gaussians
-public SpectrumBasis get_spectrum_basis_gaussian(float4 wavelengths)
-{
-    float4 tr = (wavelengths - 671.6054) / 26.5297;
-    float4 tg = (wavelengths - 508.8906) / 26.5518;
-    float4 tb = (wavelengths - 442.8418) / 43.3015;
-    float4 r = exp(-tr * tr);
-    float4 g = exp(-tg * tg);
-    float4 b = exp(-tb * tb);
-    float4 weight = rcp(r + g + b);
-    SpectrumBasis basis;
-    basis.primaries[0] = float3(r.x, g.x, b.x) * weight.x;
-    basis.primaries[1] = float3(r.y, g.y, b.y) * weight.y;
-    basis.primaries[2] = float3(r.z, g.z, b.z) * weight.z;
-    basis.primaries[3] = float3(r.w, g.w, b.w) * weight.w;
-    cie_matching(wavelengths, basis.xyz[0], basis.xyz[1], basis.xyz[2], basis.xyz[3]);
-    return basis;
-}
-
-// Given an RGB color, how much light is reflected at each of the sampled wavelengths?
-public float4 rgb_to_spectrum(float3 rgb, SpectrumBasis basis)
-{
-    return float4(dot(rgb, basis.primaries[0]), dot(rgb, basis.primaries[1]),
-                  dot(rgb, basis.primaries[2]), dot(rgb, basis.primaries[3]));
-}
-
-// Spectrum to CIE XYZ tristimulus values at the sampled wavelengths.
-// https://en.wikipedia.org/wiki/CIE_1931_color_space#Analytical_approximation
-public float3 spectrum_to_xyz(float4 values, SpectrumBasis basis)
-{
-    return values.x * basis.xyz[0] + values.y * basis.xyz[1] +
-           values.z * basis.xyz[2] + values.w * basis.xyz[3];
-}

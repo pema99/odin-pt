@@ -11,7 +11,6 @@ uniform uint frame;
 uniform uint sample_count;
 uniform uint max_bounces;
 uniform float fov;
-uniform SpectralMode spectral_mode;
 cbuffer Camera
 {
     float3 cam_pos;
@@ -20,30 +19,6 @@ cbuffer Camera
 };
 
 RWTexture2D<float4> image;
-
-public enum SpectralMode
-{
-    RGB = 0,
-    Spectral = 1,
-    SpectralForGlassOnly = 2,
-}
-
-// RGB -> Spectrum or RGB
-float4 upsample_rgb(float3 rgb, SpectrumBasis basis)
-{
-    if (spectral_mode == SpectralMode.RGB)
-        return float4(rgb, 0.0);
-    return rgb_to_spectrum(rgb, basis);
-}
-
-// Spectrum or RGB -> linear rgb monte carlo sample
-float3 resolve_spectrum(float4 values, SpectrumBasis basis)
-{
-    if (spectral_mode == SpectralMode.RGB)
-        return values.rgb;
-    float monte_carlo_normalization = (VISIBLE_WAVELENGTH_RANGE / 4);
-    return xyz_to_ergb(spectrum_to_xyz(values, basis) * monte_carlo_normalization);
-}
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
@@ -64,6 +39,7 @@ void main(uint3 id: SV_DispatchThreadID)
     float3 ray_origin = cam_pos;
     float3 ray_direction = normalize(forward + (uv.x * aspect * right + uv.y * up) * fov_scale);
     float4 throughput = 1;
+    float4 density_to_hero_ratio = 1;
 
     float4 wavelengths = 0;
     SpectrumBasis spectrum_basis = SpectrumBasis();
@@ -84,17 +60,22 @@ void main(uint3 id: SV_DispatchThreadID)
             
             float3 view_direction = -ray_direction;
             float3 specular_normal = ensure_valid_specular_normal(attributes.geometric_normal, view_direction, attributes.normal);
-            BSDF bsdf = get_material_bsdf(mat, hit.is_front_face, attributes.normal, specular_normal);
+            BSDF bsdf = get_material_bsdf(mat, spectrum_basis, hit.is_front_face, attributes.normal, specular_normal);
 
             // Add emission
             if (any(mat.emission > 0.0))
-                color += resolve_spectrum(throughput * upsample_rgb(mat.emission, spectrum_basis), spectrum_basis);
+            {
+                color += resolve_spectrum(
+                    throughput * upsample_rgb(mat.emission, spectrum_basis),
+                    density_to_hero_ratio,
+                    spectrum_basis);
+            }
 
             // Evaluate BSDF
             uint scatter_dim = RNG_DIM_SCATTER + depth * RNG_DIMS_PER_BOUNCE;
             float3 sample_direction;
-            float3 bsdf_value_times_cosine;
-            float bsdf_density;
+            float4 bsdf_value_times_cosine;
+            float4 bsdf_density;
             bsdf.sample(
                 view_direction,
                 attributes.geometric_normal,
@@ -102,11 +83,16 @@ void main(uint3 id: SV_DispatchThreadID)
                 sample_direction,
                 bsdf_value_times_cosine,
                 bsdf_density);
-            if (bsdf_density <= 0.0)
+            if (mat.dispersion > 0 && spectral_mode != SpectralMode::RGB) {
+                throughput.yzw = 0.0;
+                density_to_hero_ratio.yzw = 0.0;
+            }
+            if (bsdf_density[0] <= 0.0)
                 break;
 
             // Accumulate integrand
-            throughput *= upsample_rgb(bsdf_value_times_cosine, spectrum_basis) / bsdf_density;
+            throughput *= bsdf_value_times_cosine / bsdf_density[0];
+            density_to_hero_ratio *= bsdf_density / bsdf_density[0];
 
             // Russian roulette
             if (depth >= 2)
@@ -128,7 +114,10 @@ void main(uint3 id: SV_DispatchThreadID)
         else
         {
             float3 sky_color = float3(0.8, 0.7, 0.6);
-            color += resolve_spectrum(throughput * upsample_rgb(sky_color, spectrum_basis), spectrum_basis);
+            color += resolve_spectrum(
+                throughput * upsample_rgb(sky_color, spectrum_basis),
+                density_to_hero_ratio,
+                spectrum_basis);
             break;
         }
     }

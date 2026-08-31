@@ -4,6 +4,7 @@ import "core:slice"
 import "core:strings"
 import vk "vendor:vulkan"
 import "core:path/filepath"
+import cgltf "vendor:cgltf"
 import ai "lib:assimp"
 import stbi "vendor:stb/image"
 import "gpu"
@@ -110,6 +111,7 @@ Material_Info :: struct {
     metallic: f32,
     roughness: f32,
     index_of_refraction: f32,
+    dispersion: f32,
     albedo_texture_index: u32,
     emission_texture_index: u32,
     metallic_texture_index: u32,
@@ -230,6 +232,25 @@ ai_texture_load :: proc(cmd: ^gpu.Cmd, scene: ^Scene, ai_scene: ^ai.Scene, path:
     return albedo_texture_index
 }
 
+// assimp does not support KHR_materials_dispersion, so read it with cgltf instead...
+// https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_dispersion
+gltf_read_dispersion :: proc(path: cstring, allocator := context.allocator) -> (result: []f32) {
+    options: cgltf.options
+    data, parse_result := cgltf.parse_file(options, path)
+    if parse_result != .success {
+        return
+    }
+    defer cgltf.free(data)
+
+    result = make([]f32, len(data.materials), allocator)
+    for material, material_index in data.materials {
+        if material.has_dispersion {
+            result[material_index] = material.dispersion.dispersion
+        }
+    }
+    return
+}
+
 scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #optional_ok {
     ai_scene := ai.ImportFile(path, {
         .Triangulate,
@@ -282,6 +303,9 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
         gp_add_mesh(&scene.geometry_pool, verts, normals, tangents, uvs, faces, mesh.mMaterialIndex)
     }
 
+    dispersions := gltf_read_dispersion(path)
+    defer delete(dispersions)
+
     for material_index: u32 = 0; material_index < ai_scene.mNumMaterials; material_index += 1 {
         material := ai_scene.mMaterials[material_index]
         albedo := [3]f32{1, 1, 1}
@@ -289,8 +313,9 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
         metallic := f32(0)
         roughness := f32(1)
         index_of_refraction := f32(1.5)
+        dispersion := f32(0.0)
         bsdf_type := Material_BSDF.Disney
-
+        
         ai_albedo: ai.Color4D
         if ai.GetMaterialColor(material, ai.MATKEY_COLOR_DIFFUSE, 0, 0, &ai_albedo) == .SUCCESS {
             albedo = [3]f32{ai_albedo.r, ai_albedo.g, ai_albedo.b}
@@ -310,6 +335,9 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
         if ai.GetMaterialFloat(material, ai.MATKEY_TRANSMISSION_FACTOR, 0, 0, &transmission) == .SUCCESS && transmission > 0 {
             bsdf_type = Material_BSDF.Glass
         }
+        if material_index < u32(len(dispersions)) {
+            dispersion = dispersions[material_index]
+        }
 
         mp_add_material(&scene.material_pool, Material_Info {
             albedo = albedo,
@@ -317,6 +345,7 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
             metallic = metallic,
             roughness = roughness,
             index_of_refraction = index_of_refraction,
+            dispersion = dispersion,
             albedo_texture_index = ai_texture_load(cmd, &scene, ai_scene, path, material, .DIFFUSE),
             emission_texture_index = ai_texture_load(cmd, &scene, ai_scene, path, material, .EMISSIVE),
             metallic_texture_index = ai_texture_load(cmd, &scene, ai_scene, path, material, .METALNESS),

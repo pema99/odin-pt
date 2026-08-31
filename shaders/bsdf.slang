@@ -2,22 +2,23 @@ module bsdf;
 
 import common;
 import sampling;
+import spectrum;
 
 public interface BSDF
 {
     void evaluate(
         float3 view_direction,
         float3 sample_direction,
-        out float3 value_times_cosine,
-        out float density);
+        out float4 value_times_cosine,
+        out float4 density);
 
     void sample(
         float3 view_direction,
         float3 geometric_normal,
         float2 random_sample,
         out float3 sample_direction,
-        out float3 value_times_cosine,
-        out float density);
+        out float4 value_times_cosine,
+        out float4 density);
 }
 
 public enum BSDFType : uint
@@ -31,11 +32,11 @@ public enum BSDFType : uint
 
 public struct LambertianBSDF : BSDF
 {
-    public float3 albedo;
+    public float4 albedo;
     public float3 normal;
 
     public void evaluate(float3 view_direction, float3 sample_direction,
-        out float3 value_times_cosine, out float density)
+        out float4 value_times_cosine, out float4 density)
     {
         float n_dot_l = max(0.0, dot(normal, sample_direction));
         density = n_dot_l / PI;
@@ -43,14 +44,14 @@ public struct LambertianBSDF : BSDF
     }
 
     public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
-        out float3 sample_direction, out float3 value_times_cosine, out float density)
+        out float3 sample_direction, out float4 value_times_cosine, out float4 density)
     {
         sample_direction = cosine_hemisphere(random_sample, normal);
         evaluate(view_direction, sample_direction, value_times_cosine, density);
 
         if (dot(geometric_normal, sample_direction) <= 0.0)
         {
-            value_times_cosine = float3(0.0);
+            value_times_cosine = 0.0;
             density = 0.0;
         }
     }
@@ -81,7 +82,7 @@ float smith_ggx_geom(float n_dot_l, float n_dot_v, float alpha)
 }
 
 // https://en.wikipedia.org/wiki/Schlick's_approximation
-float3 fresnel_schlick(float v_dot_h, float3 f0)
+float4 fresnel_schlick(float v_dot_h, float4 f0)
 {
     float m = 1.0 - v_dot_h;
     float f = m * m * m * m * m;
@@ -98,7 +99,7 @@ float cook_torrance_reflection(float n_dot_l, float n_dot_v, float n_dot_h, floa
 }
 
 // Microfacet Models for Refraction through Rough Surfaces, Walter et al., 2007, (eq. 20)
-float3 cook_torrance(float n_dot_l, float n_dot_v, float n_dot_h, float v_dot_h, float3 f0, float alpha)
+float4 cook_torrance(float n_dot_l, float n_dot_v, float n_dot_h, float v_dot_h, float4 f0, float alpha)
 {
     return fresnel_schlick(v_dot_h, f0) * cook_torrance_reflection(n_dot_l, n_dot_v, n_dot_h, alpha);
 }
@@ -126,14 +127,14 @@ float2 ggx_ss_directional_albedo_scale_bias(float roughness, float n_dot_v)
 // Compensation factor for loss of energy with single-scattering microfacet model
 // Turquin, Practical multiple scattering compensation for microfacet models, 2019, (eq. 16)
 // https://blog.selfshadow.com/publications/turquin/ms_comp_final.pdf
-float3 turquin_ss_compensation(float3 f0, float white_albedo)
+float4 turquin_ss_compensation(float4 f0, float white_albedo)
 {
     return 1.0 + f0 * (1.0 - white_albedo) / white_albedo;
 }
 
 // Directional albedo for GGX lobe, compensated to approximate multiple-scattering, i.e:
 // E(v, f0) = ∫Ω t * fr(f0, v, ω) dot(n, ω) dω    where t is the compensation
-float3 ggx_ms_directional_albedo(float3 f0, float roughness, float n_dot_v)
+float4 ggx_ms_directional_albedo(float4 f0, float roughness, float n_dot_v)
 {
     float2 ab = ggx_ss_directional_albedo_scale_bias(roughness, n_dot_v);
     return saturate((f0 * ab.x + ab.y) * turquin_ss_compensation(f0, 1.0 * ab.x + ab.y));
@@ -141,7 +142,7 @@ float3 ggx_ms_directional_albedo(float3 f0, float roughness, float n_dot_v)
 
 // Same as ggx_ms_directional_albedo but averaged over all view directions, i.e:
 // E_avg(f0) = 2 ∫_0^1 E(μ, f0) μ dμ    where μ = dot(n, v)
-float3 ggx_ms_average_albedo(float3 f0, float roughness)
+float4 ggx_ms_average_albedo(float4 f0, float roughness)
 {
     float r = roughness;
     float c0 = 0.062232 - 0.123081 * r + 0.064461 * r * r;
@@ -185,14 +186,14 @@ float ggx_vndf_pdf(float n_dot_v, float n_dot_h, float alpha)
 
 public struct CookTorranceBSDF : BSDF
 {
-    public float3 f0;
+    public float4 f0;
     public float roughness;
     public float3 normal;
 
     public void evaluate(float3 view_direction, float3 sample_direction,
-        out float3 value_times_cosine, out float density)
+        out float4 value_times_cosine, out float4 density)
     {
-        value_times_cosine = float3(0.0);
+        value_times_cosine = 0.0;
         density = 0.0;
         float n_dot_l = dot(normal, sample_direction);
         float n_dot_v = dot(normal, view_direction);
@@ -211,7 +212,7 @@ public struct CookTorranceBSDF : BSDF
     }
 
     public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
-        out float3 sample_direction, out float3 value_times_cosine, out float density)
+        out float3 sample_direction, out float4 value_times_cosine, out float4 density)
     {
         float alpha = max(roughness * roughness, 1e-3);
         float3x3 basis = ortho_basis_from_vector(normal);
@@ -223,7 +224,7 @@ public struct CookTorranceBSDF : BSDF
 
         if (dot(geometric_normal, sample_direction) <= 0.0)
         {
-            value_times_cosine = float3(0.0);
+            value_times_cosine = 0.0;
             density = 0.0;
         }
     }
@@ -234,18 +235,18 @@ public struct CookTorranceBSDF : BSDF
 public interface BSDFMixWeights
 {
     // weight applied to each bsdf
-    void weights(float3 view_direction, float3 sample_direction, out float3 weight_a, out float3 weight_b);
+    void weights(float3 view_direction, float3 sample_direction, out float4 weight_a, out float4 weight_b);
     // probability to sample the first bsdf (a)
     float probability_a(float3 view_direction);
 }
 
 public struct ConstantWeights : BSDFMixWeights
 {
-    public float3 weight_a;
-    public float3 weight_b;
+    public float4 weight_a;
+    public float4 weight_b;
     public float probability;
 
-    public void weights(float3 view_direction, float3 sample_direction, out float3 out_a, out float3 out_b)
+    public void weights(float3 view_direction, float3 sample_direction, out float4 out_a, out float4 out_b)
     {
         out_a = weight_a;
         out_b = weight_b;
@@ -265,12 +266,12 @@ public struct MixtureBSDF<A : BSDF, B : BSDF, W : BSDFMixWeights> : BSDF
     public W weighting;
 
     public void evaluate(float3 view_direction, float3 sample_direction,
-        out float3 value_times_cosine, out float density)
+        out float4 value_times_cosine, out float4 density)
     {
-        float3 weight_a, weight_b;
+        float4 weight_a, weight_b;
         weighting.weights(view_direction, sample_direction, weight_a, weight_b);
-        float3 value_a, value_b;
-        float density_a, density_b;
+        float4 value_a, value_b;
+        float4 density_a, density_b;
         bsdf_a.evaluate(view_direction, sample_direction, value_a, density_a);
         bsdf_b.evaluate(view_direction, sample_direction, value_b, density_b);
         float probability_a = weighting.probability_a(view_direction);
@@ -279,12 +280,12 @@ public struct MixtureBSDF<A : BSDF, B : BSDF, W : BSDFMixWeights> : BSDF
     }
 
     public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
-        out float3 sample_direction, out float3 value_times_cosine, out float density)
+        out float3 sample_direction, out float4 value_times_cosine, out float4 density)
     {
         float probability_a = weighting.probability_a(view_direction);
         float u1 = random_sample.x;
-        float3 lobe_value;
-        float lobe_density;
+        float4 lobe_value;
+        float4 lobe_density;
         if (u1 < probability_a)
         {
             u1 = saturate(u1 / probability_a);
@@ -298,9 +299,9 @@ public struct MixtureBSDF<A : BSDF, B : BSDF, W : BSDFMixWeights> : BSDF
                 sample_direction, lobe_value, lobe_density);
         }
 
-        if (lobe_density <= 0.0)
+        if (lobe_density[0] <= 0.0)
         {
-            value_times_cosine = float3(0.0);
+            value_times_cosine = 0.0;
             density = 0.0;
             return;
         }
@@ -313,22 +314,22 @@ public struct MixtureBSDF<A : BSDF, B : BSDF, W : BSDFMixWeights> : BSDF
 // Lobe b sits under lobe a and receives only the energy a did not reflect away.
 public struct CoatingWeights : BSDFMixWeights
 {
-    public float3 f0;
+    public float4 f0;
     public float roughness;
-    public float3 base_weight;
-    public float3 base_albedo;
+    public float4 base_weight;
+    public float4 base_albedo;
     public float3 normal;
 
     // Revisiting Physically Based Shading at Imageworks, Kulla and Conty, 2017, page 58
     // https://blog.selfshadow.com/publications/s2017-shading-course/imageworks/s2017_pbs_imageworks_slides_v2.pdf
     // "Scale in a way that avoids energy gain while losing as little energy as possible"
-    public void weights(float3 view_direction, float3 sample_direction, out float3 out_a, out float3 out_b)
+    public void weights(float3 view_direction, float3 sample_direction, out float4 out_a, out float4 out_b)
     {
         float n_dot_v = saturate(dot(normal, view_direction));
         float n_dot_l = saturate(dot(normal, sample_direction));
-        float3 transmitted_view = 1.0 - ggx_ms_directional_albedo(f0, roughness, n_dot_v);
-        float3 transmitted_sample = 1.0 - ggx_ms_directional_albedo(f0, roughness, n_dot_l);
-        out_a = float3(1.0);
+        float4 transmitted_view = 1.0 - ggx_ms_directional_albedo(f0, roughness, n_dot_v);
+        float4 transmitted_sample = 1.0 - ggx_ms_directional_albedo(f0, roughness, n_dot_l);
+        out_a = 1.0;
         out_b = base_weight * min(transmitted_view, transmitted_sample);
         // TODO: Use ggx_ms_average_albedo over Kulla-Conty's "min weight" trick.
         //       Only works if we assume base layer is lambertian!
@@ -339,9 +340,12 @@ public struct CoatingWeights : BSDFMixWeights
     public float probability_a(float3 view_direction)
     {
         float n_dot_v = saturate(dot(normal, view_direction));
-        float3 coat_albedo = ggx_ms_directional_albedo(f0, roughness, n_dot_v);
-        float energy_coat = luminance(coat_albedo);
-        float energy_base = luminance(base_weight * (1.0 - coat_albedo) * base_albedo);
+        float4 coat_albedo = ggx_ms_directional_albedo(f0, roughness, n_dot_v);
+        // float energy_coat = luminance(coat_albedo);
+        // float energy_base = luminance(base_weight * (1.0 - coat_albedo) * base_albedo);
+        // TODO: Compare above with max4^^
+        float energy_coat = max4(coat_albedo);
+        float energy_base = max4(base_weight * (1.0 - coat_albedo) * base_albedo);
         // https://pema.dev/obsidian/math/light-transport/ratio-for-diffuse-and-specular-bounce.html
         return clamp(energy_coat / max(energy_coat + energy_base, 1e-4), 0.05, 0.95);
     }
@@ -349,7 +353,7 @@ public struct CoatingWeights : BSDFMixWeights
 
 public typealias DisneyBSDF = MixtureBSDF<CookTorranceBSDF, LambertianBSDF, CoatingWeights>;
 
-public DisneyBSDF make_disney_bsdf(float3 albedo, float metallic, float roughness, float ior, float3 normal, float3 specular_normal)
+public DisneyBSDF make_disney_bsdf(float4 albedo, float metallic, float roughness, float ior, float3 normal, float3 specular_normal)
 {
     DisneyBSDF m;
 
@@ -364,7 +368,7 @@ public DisneyBSDF make_disney_bsdf(float3 albedo, float metallic, float roughnes
 
     m.weighting.f0 = m.bsdf_a.f0;
     m.weighting.roughness = roughness;
-    m.weighting.base_weight = float3(1.0 - metallic);
+    m.weighting.base_weight = 1.0 - metallic;
     m.weighting.base_albedo = albedo;
     m.weighting.normal = specular_normal;
 
@@ -388,15 +392,20 @@ float fresnel_dielectric(float c, float eta)
 public struct GlassBSDF : BSDF
 {
     public float roughness;
-    public float3 color;
+    public float4 color;
     public float eta;
     public float3 normal;
 
     public void evaluate(float3 view_direction, float3 sample_direction,
-        out float3 value_times_cosine, out float density)
+        out float4 value_times_cosine, out float4 density)
     {
-        value_times_cosine = float3(0.0);
+        value_times_cosine = 0.0;
         density = 0.0;
+        if (eta == 1.0) {
+            // delta distribution, so chance of sampling is always 0
+            return;
+        }
+
         float alpha = max(roughness * roughness, 1e-3);
         float n_dot_v = dot(normal, view_direction);
         float n_dot_l = dot(normal, sample_direction);
@@ -427,7 +436,7 @@ public struct GlassBSDF : BSDF
         if (is_reflection)
         {
             density = fresnel * ggx_vndf_pdf(n_dot_v, n_dot_h, alpha);
-            value_times_cosine = float3(fresnel * cook_torrance_reflection(n_dot_l, n_dot_v, n_dot_h, alpha) * n_dot_l);
+            value_times_cosine = fresnel * cook_torrance_reflection(n_dot_l, n_dot_v, n_dot_h, alpha) * n_dot_l;
         }
         else
         {
@@ -444,13 +453,21 @@ public struct GlassBSDF : BSDF
             float visible_normal_density = masking * distribution * v_dot_h / n_dot_v;
             density = (1.0 - fresnel) * visible_normal_density * eta * eta
                 * abs(l_dot_h) / (denominator * denominator);
-            value_times_cosine = float3(transmission * abs(n_dot_l)) * color;
+            value_times_cosine = transmission * abs(n_dot_l) * color;
         }
     }
 
     public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
-        out float3 sample_direction, out float3 value_times_cosine, out float density)
+        out float3 sample_direction, out float4 value_times_cosine, out float4 density)
     {
+        if (eta == 1.0) {
+            // "pass through" material, just tints
+            sample_direction = -view_direction;
+            value_times_cosine = color;
+            density = 1.0;
+            return;
+        }
+
         float alpha = max(roughness * roughness, 1e-3);
         float3x3 basis = ortho_basis_from_vector(normal);
         float3 local_view = mul(transpose(basis), view_direction);
@@ -473,7 +490,7 @@ public struct GlassBSDF : BSDF
         float geometric_side = dot(geometric_normal, sample_direction);
         if (dot(normal, sample_direction) > 0.0 ? geometric_side <= 0.0 : geometric_side >= 0.0)
         {
-            value_times_cosine = float3(0.0);
+            value_times_cosine = 0.0;
             density = 0.0;
         }
     }
