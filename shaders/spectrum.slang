@@ -11,20 +11,19 @@ public enum SpectralMode
     SpectralForGlassOnly = 2,
 }
 
-public uniform SpectralMode spectral_mode;
 
 // RGB -> Spectrum or RGB
-public float4 upsample_rgb(float3 rgb, SpectrumBasis basis)
+public float4 upsample_rgb<let MODE : SpectralMode>(float3 rgb, SpectrumBasis basis)
 {
-    if (spectral_mode == SpectralMode.RGB)
+    if (MODE == SpectralMode.RGB)
         return float4(rgb, 0.0);
     return rgb_to_spectrum(rgb, basis);
 }
 
 // Spectrum or RGB -> linear rgb monte carlo sample
-public float3 resolve_spectrum(float4 values, float4 density_to_hero_ratio, SpectrumBasis basis)
+public float3 resolve_spectrum<let MODE : SpectralMode>(float4 values, float4 density_to_hero_ratio, SpectrumBasis basis)
 {
-    if (spectral_mode == SpectralMode.RGB)
+    if (MODE == SpectralMode.RGB)
         return values.rgb;
     float monte_carlo_normalization = VISIBLE_WAVELENGTH_RANGE / dot(density_to_hero_ratio, 1);
     return xyz_to_ergb(spectrum_to_xyz(values, basis) * monte_carlo_normalization);

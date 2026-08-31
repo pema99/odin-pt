@@ -44,6 +44,11 @@ Spectral_Mode :: enum u32 {
     SpectralForGlassOnly = 2,
 }
 
+// Helpers
+spectral_mode_kernel :: proc(mode: Spectral_Mode) -> string {
+    return mode == .RGB ? "main_rgb" : "main_spectral"
+}
+
 // State
 App_State :: struct {
     // Settings
@@ -75,6 +80,7 @@ App_State :: struct {
 }
 app: App_State
 
+// App api
 app_init :: proc() -> App_State {
     context.logger = log.create_console_logger()
 
@@ -127,7 +133,7 @@ app_init :: proc() -> App_State {
     }
     state.trace = trace
     state.output = gpu.create_texture(WIDTH, HEIGHT, .R32G32B32A32_SFLOAT, writable = true)
-    state.kernel_size = gpu.get_kernel_size(state.trace, "main")
+    state.kernel_size = gpu.get_kernel_size(state.trace, spectral_mode_kernel(state.spectral_mode))
     state.num_groups = ([2]u32{WIDTH, HEIGHT} + state.kernel_size.xy - 1) / state.kernel_size.xy
 
     state.last_mouse.x, state.last_mouse.y = glfw.GetCursorPos(gpu.get_window())
@@ -183,7 +189,7 @@ app_tick :: proc(state: ^App_State) {
         if new_trace, ok := gpu.compile_shader(state.shader_path); ok {
             gpu.destroy_shader(state.trace)
             state.trace = new_trace
-            state.kernel_size = gpu.get_kernel_size(state.trace, "main")
+            state.kernel_size = gpu.get_kernel_size(state.trace, spectral_mode_kernel(state.spectral_mode))
             state.num_groups = ([2]u32{state.output.width, state.output.height} + state.kernel_size.xy - 1) / state.kernel_size.xy
             state.sample_count = 0
         }
@@ -207,28 +213,28 @@ app_do_frame :: proc(state: ^App_State) {
         }
         
         scene := state.scene
+        kernel := spectral_mode_kernel(state.spectral_mode)
         gpu.reset_cmd(cmd)
         gpu.begin_profile(cmd, "frame")
 
-        gpu.set_cbuffer(cmd, trace, "main", "Camera", &state.cam)
-        gpu.set_uniform(cmd, trace, "main", "screen_size", [2]u32{state.output.width, state.output.height})
-        gpu.set_uniform(cmd, trace, "main", "frame", state.frame)
-        gpu.set_uniform(cmd, trace, "main", "sample_count", state.sample_count)
-        gpu.set_uniform(cmd, trace, "main", "max_bounces", state.max_bounces)
-        gpu.set_uniform(cmd, trace, "main", "fov", state.fov)
-        gpu.set_uniform(cmd, trace, "main", "spectral_mode", u32(state.spectral_mode))
-
-        gpu.set_tlas(cmd, trace, "main", "scene", scene.tlas)
-        gpu.set_buffer(cmd, trace, "main", "instance_to_pool", scene.geometry_pool.instance_to_pool.buffer)
-        gpu.set_buffer(cmd, trace, "main", "positions", scene.geometry_pool.vertices.buffer)
-        gpu.set_buffer(cmd, trace, "main", "normals", scene.geometry_pool.normals.buffer)
-        gpu.set_buffer(cmd, trace, "main", "tangents", scene.geometry_pool.tangents.buffer)
-        gpu.set_buffer(cmd, trace, "main", "uvs", scene.geometry_pool.uvs.buffer)
-        gpu.set_buffer(cmd, trace, "main", "indices", scene.geometry_pool.indices.buffer)
-        gpu.set_buffer(cmd, trace, "main", "materials", scene.material_pool.materials.buffer)
-        gpu.set_texture_array(cmd, trace, "main", "textures", scene.material_pool.textures)
-        gpu.set_texture(cmd, trace, "main", "image", state.output)
-        gpu.dispatch(cmd, trace, "main", state.num_groups.x, state.num_groups.y)
+        gpu.set_cbuffer(cmd, trace, kernel, "Camera", &state.cam)
+        gpu.set_uniform(cmd, trace, kernel, "screen_size", [2]u32{state.output.width, state.output.height})
+        gpu.set_uniform(cmd, trace, kernel, "frame", state.frame)
+        gpu.set_uniform(cmd, trace, kernel, "sample_count", state.sample_count)
+        gpu.set_uniform(cmd, trace, kernel, "max_bounces", state.max_bounces)
+        gpu.set_uniform(cmd, trace, kernel, "fov", state.fov)
+        
+        gpu.set_tlas(cmd, trace, kernel, "scene", scene.tlas)
+        gpu.set_buffer(cmd, trace, kernel, "instance_to_pool", scene.geometry_pool.instance_to_pool.buffer)
+        gpu.set_buffer(cmd, trace, kernel, "positions", scene.geometry_pool.vertices.buffer)
+        gpu.set_buffer(cmd, trace, kernel, "normals", scene.geometry_pool.normals.buffer)
+        gpu.set_buffer(cmd, trace, kernel, "tangents", scene.geometry_pool.tangents.buffer)
+        gpu.set_buffer(cmd, trace, kernel, "uvs", scene.geometry_pool.uvs.buffer)
+        gpu.set_buffer(cmd, trace, kernel, "indices", scene.geometry_pool.indices.buffer)
+        gpu.set_buffer(cmd, trace, kernel, "materials", scene.material_pool.materials.buffer)
+        gpu.set_texture_array(cmd, trace, kernel, "textures", scene.material_pool.textures)
+        gpu.set_texture(cmd, trace, kernel, "image", state.output)
+        gpu.dispatch(cmd, trace, kernel, state.num_groups.x, state.num_groups.y)
 
         gpu.end_profile(cmd)
         gpu.execute_cmd(cmd)

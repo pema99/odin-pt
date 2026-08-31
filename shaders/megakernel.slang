@@ -20,9 +20,7 @@ cbuffer Camera
 
 RWTexture2D<float4> image;
 
-[shader("compute")]
-[numthreads(8, 8, 1)]
-void main(uint3 id: SV_DispatchThreadID)
+void trace<let MODE : SpectralMode>(uint3 id)
 {
     if (any(id.xy >= screen_size))
         return;
@@ -43,7 +41,7 @@ void main(uint3 id: SV_DispatchThreadID)
 
     float4 wavelengths = 0;
     SpectrumBasis spectrum_basis = SpectrumBasis();
-    if (spectral_mode != SpectralMode.RGB)
+    if (MODE != SpectralMode.RGB)
     {
         wavelengths = sample_wavelengths(kronecker_2d(id.xy, frame, RNG_DIM_WAVELENGTH).x);
         spectrum_basis = get_spectrum_basis(wavelengths);
@@ -60,13 +58,13 @@ void main(uint3 id: SV_DispatchThreadID)
             
             float3 view_direction = -ray_direction;
             float3 specular_normal = ensure_valid_specular_normal(attributes.geometric_normal, view_direction, attributes.normal);
-            BSDF bsdf = get_material_bsdf(mat, spectrum_basis, hit.is_front_face, attributes.normal, specular_normal);
+            BSDF bsdf = get_material_bsdf<MODE>(mat, spectrum_basis, hit.is_front_face, attributes.normal, specular_normal);
 
             // Add emission
             if (any(mat.emission > 0.0))
             {
-                color += resolve_spectrum(
-                    throughput * upsample_rgb(mat.emission, spectrum_basis),
+                color += resolve_spectrum<MODE>(
+                    throughput * upsample_rgb<MODE>(mat.emission, spectrum_basis),
                     density_to_hero_ratio,
                     spectrum_basis);
             }
@@ -110,8 +108,8 @@ void main(uint3 id: SV_DispatchThreadID)
         else
         {
             float3 sky_color = float3(0.8, 0.7, 0.6);
-            color += resolve_spectrum(
-                throughput * upsample_rgb(sky_color, spectrum_basis),
+            color += resolve_spectrum<MODE>(
+                throughput * upsample_rgb<MODE>(sky_color, spectrum_basis),
                 density_to_hero_ratio,
                 spectrum_basis);
             break;
@@ -120,3 +118,11 @@ void main(uint3 id: SV_DispatchThreadID)
     float3 prev = sample_count == 0 ? color : image[id.xy].rgb;
     image[id.xy] = float4(lerp(prev, color, 1.0 / (sample_count + 1)), 1.0);
 }
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void main_rgb(uint3 id: SV_DispatchThreadID) { trace<SpectralMode.RGB>(id); }
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void main_spectral(uint3 id: SV_DispatchThreadID) { trace<SpectralMode.Spectral>(id); }
