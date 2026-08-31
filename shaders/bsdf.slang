@@ -380,12 +380,19 @@ public DisneyBSDF make_disney_bsdf(float4 albedo, float metallic, float roughnes
 float fresnel_dielectric(float c, float eta)
 {
     float g2 = eta * eta - 1.0 + c * c;
-    if (g2 < 0.0)
-        return 1.0;
-
-    float g = sqrt(g2);
+    float g = sqrt(max(g2, 0.0));
     float a = (g - c) / (g + c);
     float b = (c * (g + c) - 1.0) / (c * (g - c) + 1.0);
+    return 0.5 * a * a * (1.0 + b * b);
+}
+
+// Same as above but vectorized
+float4 fresnel_dielectric(float c, float4 eta)
+{
+    float4 g2 = eta * eta - 1.0 + c * c;
+    float4 g = sqrt(max(g2, 0.0));
+    float4 a = (g - c) / (g + c);
+    float4 b = (c * (g + c) - 1.0) / (c * (g - c) + 1.0);
     return 0.5 * a * a * (1.0 + b * b);
 }
 
@@ -393,7 +400,7 @@ public struct GlassBSDF : BSDF
 {
     public float roughness;
     public float4 color;
-    public float eta;
+    public float4 eta;
     public float3 normal;
 
     public void evaluate(float3 view_direction, float3 sample_direction,
@@ -401,7 +408,7 @@ public struct GlassBSDF : BSDF
     {
         value_times_cosine = 0.0;
         density = 0.0;
-        if (eta == 1.0) {
+        if (all(eta == 1.0)) {
             // delta distribution, so chance of sampling is always 0
             return;
         }
@@ -413,46 +420,61 @@ public struct GlassBSDF : BSDF
         if (n_dot_v <= 0.0 || n_dot_l == 0.0)
             return;
 
-        float3 half_vector;
         if (is_reflection)
         {
-            half_vector = normalize(view_direction + sample_direction);
-        }
-        else
-        {
-            half_vector = -normalize(view_direction + eta * sample_direction);
-            if (dot(half_vector, normal) < 0.0)
-                half_vector = -half_vector;
-        }
+            float3 half_vector = normalize(view_direction + sample_direction);
+            float n_dot_h = dot(normal, half_vector);
+            float v_dot_h = dot(view_direction, half_vector);
 
-        float n_dot_h = dot(normal, half_vector);
-        float v_dot_h = dot(view_direction, half_vector);
-        float l_dot_h = dot(sample_direction, half_vector);
-        if (!is_reflection && (v_dot_h <= 0.0 || l_dot_h >= 0.0))
-            return;
-
-        // Must match probability in sample()
-        float fresnel = fresnel_dielectric(v_dot_h, eta);
-        if (is_reflection)
-        {
+            // Must match probability in sample()
+            float4 fresnel = fresnel_dielectric(v_dot_h, eta);
             density = fresnel * ggx_vndf_pdf(n_dot_v, n_dot_h, alpha);
             value_times_cosine = fresnel * cook_torrance_reflection(n_dot_l, n_dot_v, n_dot_h, alpha) * n_dot_l;
         }
         else
         {
-            // Walter et al., 2007, (eq. 21)
-            float distribution = ggx_ndf(n_dot_h, alpha);
             float geometry = smith_ggx_geom(-n_dot_l, n_dot_v, alpha);
-            float denominator = v_dot_h + eta * l_dot_h;
-            float transmission = abs(v_dot_h * l_dot_h) / abs(n_dot_v * n_dot_l)
-                * (1.0 - fresnel) * geometry * distribution
-                / (denominator * denominator);
-
-            // Walter et al., 2007, (eq. 17)
             float masking = 1.0 / (1.0 + smith_ggx_helper(n_dot_v, alpha));
-            float visible_normal_density = masking * distribution * v_dot_h / n_dot_v;
-            density = (1.0 - fresnel) * visible_normal_density * eta * eta
-                * abs(l_dot_h) / (denominator * denominator);
+
+            // when wavelengths differ, each gets a different half-vector,
+            // so we must process them in a loop
+            uint wavelength_count = all(eta == eta[0]) ? 1 : 4;
+
+            float4 transmission = 0.0;
+            for (uint i = 0; i < wavelength_count; i++)
+            {
+                float3 half_vector = -normalize(view_direction + eta[i] * sample_direction);
+                if (dot(half_vector, normal) < 0.0)
+                    half_vector = -half_vector;
+
+                float n_dot_h = dot(normal, half_vector);
+                float v_dot_h = dot(view_direction, half_vector);
+                float l_dot_h = dot(sample_direction, half_vector);
+                if (v_dot_h <= 0.0 || l_dot_h >= 0.0)
+                    continue;
+
+                float fresnel = fresnel_dielectric(v_dot_h, eta[i]);
+                float distribution = ggx_ndf(n_dot_h, alpha);
+                float denominator = v_dot_h + eta[i] * l_dot_h;
+
+                // Walter et al., 2007, (eq. 21)
+                transmission[i] = abs(v_dot_h * l_dot_h) / abs(n_dot_v * n_dot_l)
+                    * (1.0 - fresnel) * geometry * distribution
+                    / (denominator * denominator);
+
+                // Walter et al., 2007, (eq. 17)
+                float visible_normal_density = masking * distribution * v_dot_h / n_dot_v;
+                density[i] = (1.0 - fresnel) * visible_normal_density * eta[i] * eta[i]
+                    * abs(l_dot_h) / (denominator * denominator);
+            }
+
+            // Splat the single result in the case where wavelengths are the same
+            if (wavelength_count == 1)
+            {
+                transmission = transmission.x;
+                density = density.x;
+            }
+            
             value_times_cosine = transmission * abs(n_dot_l) * color;
         }
     }
@@ -460,7 +482,7 @@ public struct GlassBSDF : BSDF
     public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
         out float3 sample_direction, out float4 value_times_cosine, out float4 density)
     {
-        if (eta == 1.0) {
+        if (all(eta == 1.0)) {
             // "pass through" material, just tints
             sample_direction = -view_direction;
             value_times_cosine = color;
@@ -474,7 +496,7 @@ public struct GlassBSDF : BSDF
         float3 local_half = sample_ggx_vndf(local_view, alpha, random_sample.x, random_sample.y);
 
         // Choose reflection vs refraction with fresnel
-        float reflection_probability = fresnel_dielectric(dot(local_view, local_half), eta);
+        float reflection_probability = fresnel_dielectric(dot(local_view, local_half), eta).x;
         float3 local_sample;
         if (frac(random_sample.x * 1024.0) < reflection_probability) // reuse rng
         {
@@ -482,7 +504,8 @@ public struct GlassBSDF : BSDF
         }
         else
         {
-            local_sample = refract(-local_view, local_half, 1.0 / eta);
+            // only hero sample decides where the ray continues
+            local_sample = refract(-local_view, local_half, 1.0 / eta[0]);
         }
         sample_direction = mul(basis, local_sample);
         evaluate(view_direction, sample_direction, value_times_cosine, density);

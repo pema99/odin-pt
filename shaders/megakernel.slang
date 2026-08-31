@@ -83,10 +83,6 @@ void main(uint3 id: SV_DispatchThreadID)
                 sample_direction,
                 bsdf_value_times_cosine,
                 bsdf_density);
-            if (mat.dispersion > 0 && spectral_mode != SpectralMode::RGB) {
-                throughput.yzw = 0.0;
-                density_to_hero_ratio.yzw = 0.0;
-            }
             if (bsdf_density[0] <= 0.0)
                 break;
 

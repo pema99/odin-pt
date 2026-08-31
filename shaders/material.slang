@@ -67,7 +67,7 @@ public BSDF get_material_bsdf(MaterialInfo mat, SpectrumBasis spectrum_basis, bo
             ior = mat.index_of_refraction;
         else
             ior = dispersive_ior(mat.index_of_refraction, mat.dispersion, spectrum_basis.wavelengths);
-        bsdf = GlassBSDF(mat.roughness, albedo_spectrum, entering ? ior[0] : rcp(ior[0]), specular_normal);
+        bsdf = GlassBSDF(mat.roughness, albedo_spectrum, entering ? ior : rcp(ior), specular_normal);
     }
     return bsdf;
 }
