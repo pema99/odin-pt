@@ -2,10 +2,11 @@ module rng;
 
 // Once:
 public static const uint RNG_DIM_JITTER = 0;
+public static const uint RNG_DIM_WAVELENGTH = 1;
 // Per bounce:
 public static const uint RNG_DIMS_PER_BOUNCE = 2;
-public static const uint RNG_DIM_SCATTER = 1;
-public static const uint RNG_DIM_RUSSIAN_ROULETTE = 2;
+public static const uint RNG_DIM_SCATTER = 2;
+public static const uint RNG_DIM_RUSSIAN_ROULETTE = 3;
 
 // From https://github.com/skeeto/hash-prospector/issues/19
 public uint low_bias_hash(uint value)

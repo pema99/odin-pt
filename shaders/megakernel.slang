@@ -4,12 +4,14 @@ import bsdf;
 import material;
 import common;
 import rng;
+import spectrum;
 
 uniform uint2 screen_size;
 uniform uint frame;
 uniform uint sample_count;
 uniform uint max_bounces;
 uniform float fov;
+uniform SpectralMode spectral_mode;
 cbuffer Camera
 {
     float3 cam_pos;
@@ -18,6 +20,30 @@ cbuffer Camera
 };
 
 RWTexture2D<float4> image;
+
+public enum SpectralMode
+{
+    RGB = 0,
+    Spectral = 1,
+    SpectralForGlassOnly = 2,
+}
+
+// RGB -> Spectrum or RGB
+float4 upsample_rgb(float3 rgb, SpectrumBasis basis)
+{
+    if (spectral_mode == SpectralMode.RGB)
+        return float4(rgb, 0.0);
+    return rgb_to_spectrum(rgb, basis);
+}
+
+// Spectrum or RGB -> linear rgb monte carlo sample
+float3 resolve_spectrum(float4 values, SpectrumBasis basis)
+{
+    if (spectral_mode == SpectralMode.RGB)
+        return values.rgb;
+    float monte_carlo_normalization = (VISIBLE_WAVELENGTH_RANGE / 4);
+    return xyz_to_ergb(spectrum_to_xyz(values, basis) * monte_carlo_normalization);
+}
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
@@ -37,7 +63,15 @@ void main(uint3 id: SV_DispatchThreadID)
 
     float3 ray_origin = cam_pos;
     float3 ray_direction = normalize(forward + (uv.x * aspect * right + uv.y * up) * fov_scale);
-    float3 throughput = 1;
+    float4 throughput = 1;
+
+    float4 wavelengths = 0;
+    SpectrumBasis spectrum_basis;
+    if (spectral_mode != SpectralMode.RGB)
+    {
+        wavelengths = sample_wavelengths(kronecker_2d(id.xy, frame, RNG_DIM_WAVELENGTH).x);
+        spectrum_basis = get_spectrum_basis(wavelengths);
+    }
 
     float3 color = 0.0;
     for (uint depth = 0; depth < max_bounces; depth++)
@@ -53,7 +87,8 @@ void main(uint3 id: SV_DispatchThreadID)
             BSDF bsdf = get_material_bsdf(mat, hit.is_front_face, attributes.normal, specular_normal);
 
             // Add emission
-            color += throughput * mat.emission;
+            if (any(mat.emission > 0.0))
+                color += resolve_spectrum(throughput * upsample_rgb(mat.emission, spectrum_basis), spectrum_basis);
 
             // Evaluate BSDF
             uint scatter_dim = RNG_DIM_SCATTER + depth * RNG_DIMS_PER_BOUNCE;
@@ -71,13 +106,13 @@ void main(uint3 id: SV_DispatchThreadID)
                 break;
 
             // Accumulate integrand
-            throughput *= bsdf_value_times_cosine / bsdf_density;
+            throughput *= upsample_rgb(bsdf_value_times_cosine, spectrum_basis) / bsdf_density;
 
             // Russian roulette
             if (depth >= 2)
             {
                 uint russian_roulette_dim = RNG_DIM_RUSSIAN_ROULETTE + depth * RNG_DIMS_PER_BOUNCE;
-                float russian_roulette_probability = min(1.0, max(throughput.x, max(throughput.y, throughput.z)));
+                float russian_roulette_probability = min(1.0, max(throughput.x, max(throughput.y, max(throughput.z, throughput.w))));
                 if (kronecker_2d(id.xy, frame, russian_roulette_dim).x > russian_roulette_probability)
                     break;
                 throughput *= rcp(russian_roulette_probability);
@@ -93,7 +128,7 @@ void main(uint3 id: SV_DispatchThreadID)
         else
         {
             float3 sky_color = float3(0.8, 0.7, 0.6);
-            color += throughput * sky_color;
+            color += resolve_spectrum(throughput * upsample_rgb(sky_color, spectrum_basis), spectrum_basis);
             break;
         }
     }

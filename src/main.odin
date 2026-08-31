@@ -31,10 +31,25 @@ import "gpu"
 WIDTH : u32 : 1280
 HEIGHT : u32 : 720
 
+// Structs and enums
+Camera :: struct {
+	pos: [3]f32,
+	yaw: f32,
+	pitch: f32,
+}
+
+Spectral_Mode :: enum u32 {
+    RGB = 0,
+    Spectral = 1,
+    SpectralForGlassOnly = 2,
+}
+
+// State
 App_State :: struct {
     // Settings
     max_bounces: i32,
     fov: f32,
+    spectral_mode: Spectral_Mode,
 
     // GPU state
     cmd: ^gpu.Cmd,
@@ -73,6 +88,7 @@ app_init :: proc() -> App_State {
 
     state := App_State{
         max_bounces = 20,
+        spectral_mode = .RGB,
         fov = 60.0,
         scene_index = 0,
         scene_names = [dynamic]cstring{},
@@ -200,6 +216,7 @@ app_do_frame :: proc(state: ^App_State) {
         gpu.set_uniform(cmd, trace, "main", "sample_count", state.sample_count)
         gpu.set_uniform(cmd, trace, "main", "max_bounces", state.max_bounces)
         gpu.set_uniform(cmd, trace, "main", "fov", state.fov)
+        gpu.set_uniform(cmd, trace, "main", "spectral_mode", u32(state.spectral_mode))
 
         gpu.set_tlas(cmd, trace, "main", "scene", scene.tlas)
         gpu.set_buffer(cmd, trace, "main", "instance_to_pool", scene.geometry_pool.instance_to_pool.buffer)
@@ -228,6 +245,14 @@ app_do_gui :: proc(state: ^App_State) -> bool {
     // Main UI
     changed := imgui.SliderInt("Max Bounces", &state.max_bounces, 1, 40)
     changed |= imgui.SliderFloat("FOV", &state.fov, 10.0, 120.0)
+
+    spectral_mode_names := [?]cstring{"RGB", "Spectral", "Spectral (Glass Only)"}
+    spectral_mode_index := i32(state.spectral_mode)
+    if imgui.ComboChar("Spectral Mode", &spectral_mode_index, raw_data(spectral_mode_names[:]), i32(len(spectral_mode_names))) {
+        state.spectral_mode = Spectral_Mode(spectral_mode_index)
+        changed = true
+    }
+    
     if imgui.ComboChar("Scene", &state.scene_index, raw_data(state.scene_names[:]), i32(len(state.scene_names))) {
         app_load_scene(state, state.scene_index)
         changed = true
@@ -253,12 +278,6 @@ app_delete :: proc(state: ^App_State) {
     delete(state.scene_names)
     gpu.cleanup()
     log.destroy_console_logger(context.logger)
-}
-
-Camera :: struct {
-	pos:   [3]f32,
-	yaw:   f32,
-	pitch: f32,
 }
 
 app_update_camera :: proc(c: ^Camera, last_mouse: ^[2]f64, delta_time: f32) -> bool {
