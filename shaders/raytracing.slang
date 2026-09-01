@@ -25,6 +25,7 @@ public struct Hit
     public float distance;
     public bool is_front_face;
     public float3x4 object_to_world;
+    public float3x4 world_to_object;
 
     public bool is_valid()
     {
@@ -65,6 +66,7 @@ public Hit trace_ray(float3 ray_origin, float3 ray_direction)
         hit.distance = query.CommittedRayT();
         hit.is_front_face = query.CommittedTriangleFrontFace();
         hit.object_to_world = query.CommittedObjectToWorld3x4();
+        hit.world_to_object = query.CommittedWorldToObject3x4();
     }
     return hit;
 }
@@ -100,7 +102,7 @@ public HitAttributes get_hit_attributes(Hit hit, float3 ray_origin, float3 ray_d
         + n2 * hit.barycentrics.y);
 
     float3x3 to_world = (float3x3)hit.object_to_world;
-    attributes.normal = normalize(mul(to_world, attributes.normal));
+    attributes.normal = normalize(mul(transpose((float3x3)hit.world_to_object), attributes.normal));
 
     float3 p0 = positions[geo.vertex_offset + indices[base + 0]];
     float3 p1 = positions[geo.vertex_offset + indices[base + 1]];
