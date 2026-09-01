@@ -89,6 +89,67 @@ float4 fresnel_schlick(float v_dot_h, float4 f0)
     return f0 + (1.0 - f0) * f;
 }
 
+// Guesstimate an index of refraction for metals given their f0
+// https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_iridescence/README.md
+float4 fresnel0_to_ior(float4 f0)
+{
+    float4 sqrt_f0 = sqrt(f0);
+    return (1.0 + sqrt_f0) / (1.0 - sqrt_f0);
+}
+
+// A Practical Extension to Microfacet Theory for the Modeling of Varying Iridescence,
+// Belcour & Barla, 2017, (eq. 10-11 + supplemental code)
+// https://hal.science/hal-01518344/document
+float4 fresnel_thin_film(float v_dot_h, float eta_film, float4 eta_base, float thickness, float4 wavelengths)
+{
+    // https://en.wikipedia.org/wiki/Snell%27s_law#Vector_form
+    float cos_theta_film_sq = 1.0 - (1.0 - v_dot_h * v_dot_h) / (eta_film * eta_film);
+    if (cos_theta_film_sq < 0.0)
+        return 1.0;
+    float cos_theta_film = sqrt(cos_theta_film_sq);
+    float4 cos_theta_base = sqrt(1.0 - (1.0 - v_dot_h * v_dot_h) / (eta_base * eta_base));
+
+    // 12 = air->film, 23 = film->base
+    // https://en.wikipedia.org/wiki/Fresnel_equations#Complex_amplitude_reflection_and_transmission_coefficients
+    float r12_s = (v_dot_h - eta_film * cos_theta_film) / (v_dot_h + eta_film * cos_theta_film);
+    float r12_p = (eta_film * v_dot_h - cos_theta_film) / (eta_film * v_dot_h + cos_theta_film);
+    float4 r23_s = (eta_film * cos_theta_film - eta_base * cos_theta_base)
+        / (eta_film * cos_theta_film + eta_base * cos_theta_base);
+    float4 r23_p = (eta_base * cos_theta_film - eta_film * cos_theta_base)
+        / (eta_base * cos_theta_film + eta_film * cos_theta_base);
+
+    // signed amplitude -> phase, power
+    float R12_s = r12_s * r12_s;
+    float R12_p = r12_p * r12_p;
+    float4 R23_s = r23_s * r23_s;
+    float4 R23_p = r23_p * r23_p;
+    float T121_s = 1.0 - R12_s;
+    float T121_p = 1.0 - R12_p;
+    float phi21_s = PI - (r12_s < 0.0 ? PI : 0.0);
+    float phi21_p = PI - (r12_p < 0.0 ? PI : 0.0);
+    float4 phi23_s = select(r23_s < 0.0, PI, 0.0);
+    float4 phi23_p = select(r23_p < 0.0, PI, 0.0);
+
+    // https://en.wikipedia.org/wiki/Thin-film_interference#Theory
+    // Dphi = (2pi / λ) * optical_path_difference = 4pi * eta * d * cos(theta_2) / λ
+    float4 Dphi = 4.0 * PI * eta_film * thickness * cos_theta_film / wavelengths;
+
+    // Airy summation
+    float4 r123_s = sqrt(R12_s * R23_s);
+    float4 Rs_s = T121_s * T121_s * R23_s / (1.0 - R12_s * R23_s);
+    float4 cosP_s = cos(Dphi + phi23_s + phi21_s);
+    float4 irid_s = (r123_s * cosP_s - r123_s * r123_s) / (1.0 - 2.0 * r123_s * cosP_s + r123_s * r123_s);
+    float4 I_s = R12_s + Rs_s + 2.0 * (Rs_s - T121_s) * irid_s;
+    float4 r123_p = sqrt(R12_p * R23_p);
+    float4 Rs_p = T121_p * T121_p * R23_p / (1.0 - R12_p * R23_p);
+    float4 cosP_p = cos(Dphi + phi23_p + phi21_p);
+    float4 irid_p = (r123_p * cosP_p - r123_p * r123_p) / (1.0 - 2.0 * r123_p * cosP_p + r123_p * r123_p);
+    float4 I_p = R12_p + Rs_p + 2.0 * (Rs_p - T121_p) * irid_p;
+
+    // https://en.wikipedia.org/wiki/Fresnel_equations#Power_(intensity)_reflection_and_transmission_coefficients
+    return 0.5 * (I_s + I_p);
+}
+
 // Microfacet Models for Refraction through Rough Surfaces, Walter et al., 2007, (eq. 20)
 // without the fresnel term (reflection only)
 float cook_torrance_reflection(float n_dot_l, float n_dot_v, float n_dot_h, float alpha)
@@ -186,9 +247,17 @@ float ggx_vndf_pdf(float n_dot_v, float n_dot_h, float alpha)
 
 public struct CookTorranceBSDF : BSDF
 {
+    // Base
     public float4 f0;
     public float roughness;
     public float3 normal;
+
+    // Thin film
+    public float4 wavelengths;
+    public float4 thin_film_eta_base;
+    public float thin_film_factor;
+    public float thin_film_ior;
+    public float thin_film_thickness;
 
     public void evaluate(float3 view_direction, float3 sample_direction,
         out float4 value_times_cosine, out float4 density)
@@ -206,9 +275,19 @@ public struct CookTorranceBSDF : BSDF
         float v_dot_h = dot(view_direction, half_vector);
         density = ggx_vndf_pdf(n_dot_v, n_dot_h, alpha);
 
+        float4 fresnel = fresnel_schlick(v_dot_h, f0);
+        if (thin_film_factor > 0.0)
+        {
+            float4 thin_film = fresnel_thin_film(v_dot_h, thin_film_ior, thin_film_eta_base, thin_film_thickness, wavelengths);
+            fresnel = lerp(fresnel, thin_film, 0);
+        }
+
         float2 ab = ggx_ss_directional_albedo_scale_bias(roughness, n_dot_v);
-        value_times_cosine = turquin_ss_compensation(f0, 1.0 * ab.x + ab.y)
-             * cook_torrance(n_dot_l, n_dot_v, n_dot_h, v_dot_h, f0, alpha) * n_dot_l;
+        value_times_cosine = 
+            turquin_ss_compensation(f0, 1.0 * ab.x + ab.y)
+            * fresnel
+            * cook_torrance_reflection(n_dot_l, n_dot_v, n_dot_h, alpha)
+            * n_dot_l;
     }
 
     public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
@@ -353,7 +432,17 @@ public struct CoatingWeights : BSDFMixWeights
 
 public typealias DisneyBSDF = MixtureBSDF<CookTorranceBSDF, LambertianBSDF, CoatingWeights>;
 
-public DisneyBSDF make_disney_bsdf(float4 albedo, float metallic, float roughness, float ior, float3 normal, float3 specular_normal)
+public DisneyBSDF make_disney_bsdf(
+    float4 albedo,
+    float metallic,
+    float roughness,
+    float ior,
+    float thin_film_factor,
+    float thin_film_ior,
+    float thin_film_thickness,
+    float3 normal,
+    float3 specular_normal,
+    float4 wavelengths)
 {
     DisneyBSDF m;
 
@@ -362,6 +451,12 @@ public DisneyBSDF make_disney_bsdf(float4 albedo, float metallic, float roughnes
     m.bsdf_a.f0 = lerp(f0_dielectric, albedo, metallic);
     m.bsdf_a.roughness = roughness;
     m.bsdf_a.normal = specular_normal;
+
+    m.bsdf_a.wavelengths = wavelengths;
+    m.bsdf_a.thin_film_eta_base = fresnel0_to_ior(m.bsdf_a.f0 + 0.0001);
+    m.bsdf_a.thin_film_factor = thin_film_factor;
+    m.bsdf_a.thin_film_ior = thin_film_ior;
+    m.bsdf_a.thin_film_thickness = thin_film_thickness;
 
     m.bsdf_b.albedo = albedo;
     m.bsdf_b.normal = normal;

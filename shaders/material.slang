@@ -13,6 +13,9 @@ public struct MaterialInfo
     public float roughness;
     public float index_of_refraction;
     public float dispersion;
+    public float iridescence_factor;
+    public float iridescence_ior;
+    public float iridescence_thickness;
     public uint albedo_texture_index;
     public uint emission_texture_index;
     public uint metallic_texture_index;
@@ -59,7 +62,18 @@ public BSDF get_material_bsdf<let MODE : SpectralMode>(MaterialInfo mat, Spectru
 {
     float4 albedo_spectrum = upsample_ergb<MODE>(mat.albedo, spectrum_basis);
 
-    BSDF bsdf = make_disney_bsdf(albedo_spectrum, mat.metallic, mat.roughness, mat.index_of_refraction, normal, specular_normal);
+    BSDF bsdf = make_disney_bsdf(
+        albedo_spectrum,
+        mat.metallic,
+        mat.roughness,
+        mat.index_of_refraction,
+        mat.iridescence_factor,
+        mat.iridescence_ior,
+        mat.iridescence_thickness,
+        normal,
+        specular_normal,
+        spectrum_basis.wavelengths);
+
     if (mat.bsdf_type == BSDFType::Glass)
     {
         float4 ior;
