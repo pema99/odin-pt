@@ -57,7 +57,7 @@ public MaterialInfo get_material(inout HitAttributes attributes)
 
 public BSDF get_material_bsdf<let MODE : SpectralMode>(MaterialInfo mat, SpectrumBasis spectrum_basis, bool entering, float3 normal, float3 specular_normal)
 {
-    float4 albedo_spectrum = upsample_rgb<MODE>(mat.albedo, spectrum_basis);
+    float4 albedo_spectrum = upsample_ergb<MODE>(mat.albedo, spectrum_basis);
 
     BSDF bsdf = make_disney_bsdf(albedo_spectrum, mat.metallic, mat.roughness, mat.index_of_refraction, normal, specular_normal);
     if (mat.bsdf_type == BSDFType::Glass)

@@ -64,7 +64,7 @@ void trace<let MODE : SpectralMode>(uint3 id)
             if (any(mat.emission > 0.0))
             {
                 color += resolve_spectrum<MODE>(
-                    throughput * upsample_rgb<MODE>(mat.emission, spectrum_basis),
+                    throughput * upsample_ergb<MODE>(mat.emission, spectrum_basis),
                     density_to_hero_ratio,
                     spectrum_basis);
             }
@@ -109,7 +109,7 @@ void trace<let MODE : SpectralMode>(uint3 id)
         {
             float3 sky_color = float3(0.8, 0.7, 0.6);
             color += resolve_spectrum<MODE>(
-                throughput * upsample_rgb<MODE>(sky_color, spectrum_basis),
+                throughput * upsample_ergb<MODE>(sky_color, spectrum_basis),
                 density_to_hero_ratio,
                 spectrum_basis);
             break;

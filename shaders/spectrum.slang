@@ -11,21 +11,57 @@ public enum SpectralMode
 }
 
 
-// RGB -> Spectrum or RGB
-public float4 upsample_rgb<let MODE : SpectralMode>(float3 rgb, SpectrumBasis basis)
+// (e)RGB -> Spectrum or RGB
+// eRGB means RGB with illuminant E as the whitepoint
+public float4 upsample_ergb<let MODE : SpectralMode>(float3 rgb, SpectrumBasis basis)
 {
     if (MODE == SpectralMode.RGB)
         return float4(rgb, 0.0);
-    return rgb_to_spectrum(rgb, basis);
+    return ergb_to_spectrum(rgb, basis);
 }
 
-// Spectrum or RGB -> linear rgb monte carlo sample
-public float3 resolve_spectrum<let MODE : SpectralMode>(float4 values, float4 density_to_hero_ratio, SpectrumBasis basis)
+public float3 resolve_spectrum<let MODE : SpectralMode>(
+    float4 contribution_over_hero_density,
+    float4 density_over_hero_density,
+    SpectrumBasis basis)
 {
     if (MODE == SpectralMode.RGB)
-        return values.rgb;
-    float monte_carlo_normalization = VISIBLE_WAVELENGTH_RANGE / dot(density_to_hero_ratio, 1);
-    return xyz_to_ergb(spectrum_to_xyz(values, basis) * monte_carlo_normalization);
+        return contribution_over_hero_density.rgb;
+
+    // Note to future Pema:
+    // This is a single-sample MIS estimator using balance heuristic. Start with the heuristic:
+    //   w_s(x) = n_s p_s(x) / Σ_i n_i p_i(x)
+    // We have 4 strategies (treat each wavelength as the hero) and 1 single sample (n=1), so it becomes:
+    //   w_s = p_s / Σ_i p_i = p_s / (p_0 + p_1 + p_2 + p_3)
+    // The density of technique s is given by the product of the density of sampling the wavelength
+    // of s (λ_s), and the probability of sampling the path given that we use λ_s to drive the BSDF:
+    //   p_s = p(λ_s) p(X | λ_s)
+    // The single-sample MIS estimator is given by:
+    //   Σ_s w_s f_s / p_s =
+    //   Σ_s (p_s / Σ_i p_i) f_s / p_s =
+    //   Σ_s f_s / (Σ_i p_i)
+    // We can pull p(λ_s) out of each p_i:
+    //   Σ_s f_s / (p(λ_s) Σ_i p(X | λ_i))
+    // And rewrite a bit:
+    //   Σ_s f_s / ((1/VISIBLE_RANGE) Σ_i p(X | λ_i)) = 
+    //   VISIBLE_RANGE * Σ_s f_s / Σ_i p(X | λ_i)
+    // This function receives:
+    //   contribution_over_hero_density_s = f_s / p(X | λ_0)    (call it c_s)
+    //   density_over_hero_density_s = p(X | λ_s) / p(X | λ_0)  (call it d_s)
+    // Substitute in these in the remaining estimator sum:
+    //   Σ_s f_s / Σ_i p(X | λ_i) =
+    //   Σ_s (c_s p(X | λ_0)) / (p(X | λ_0) Σ_i d_i) =
+    //   Σ_s c_s / (Σ_i d_i)
+
+    // weighted = c_s / (Σ_i d_i)
+    float4 weighted = contribution_over_hero_density / dot(density_over_hero_density, 1.0);
+    // weighted_xyz = Σ_s cie(λ_s) weighted 
+    // (conversion does the sum, color matching omitted in derivation for brevity)
+    float3 weighted_xyz = spectrum_to_xyz(weighted, basis);
+    // divide by p(λ_s)
+    float3 estimate = weighted_xyz * VISIBLE_WAVELENGTH_RANGE;
+
+    return xyz_to_ergb(estimate);
 }
 
 // See tools/fit_rgb_to_spectrum_upsample.py
@@ -177,8 +213,8 @@ public struct SpectrumBasis
     }
 }
 
-// Given an RGB color, how much light is reflected at each of the sampled wavelengths?
-float4 rgb_to_spectrum(float3 rgb, SpectrumBasis basis)
+// Given an (e)RGB color, how much light is reflected at each of the sampled wavelengths?
+float4 ergb_to_spectrum(float3 rgb, SpectrumBasis basis)
 {
     return float4(dot(rgb, basis.primaries[0]), dot(rgb, basis.primaries[1]),
                   dot(rgb, basis.primaries[2]), dot(rgb, basis.primaries[3]));
