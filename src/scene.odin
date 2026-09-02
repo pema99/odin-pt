@@ -115,6 +115,8 @@ Material_Info :: struct {
     iridescence_factor: f32,
     iridescence_ior: f32,
     iridescence_thickness: f32,
+    attenuation_color: [3]f32,
+    attenuation_distance: f32,
     albedo_texture_index: u32,
     emission_texture_index: u32,
     metallic_texture_index: u32,
@@ -240,12 +242,15 @@ Gltf_Extra_Data :: struct {
     iridescence_factor: f32,
     iridescence_ior: f32,
     iridescence_thickness: f32,
+    attenuation_color: [3]f32,
+    attenuation_distance: f32,
 }
 
-// assimp does not support KHR_materials_dispersion or KHR_materials_iridescence, so read them with cgltf instead...
+// assimp does not support all extensions, so read them with cgltf instead...
 // https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_dispersion
 // https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_iridescence
-gltf_read_extra_data :: proc(path: cstring, allocator := context.allocator) -> (result: []Gltf_Extra_Data) {
+// https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_volume
+gltf_read_extra_data :: proc(path: cstring, allocator := context.allocator) -> (result: map[string]Gltf_Extra_Data) {
     options: cgltf.options
     data, parse_result := cgltf.parse_file(options, path)
     if parse_result != .success {
@@ -253,16 +258,25 @@ gltf_read_extra_data :: proc(path: cstring, allocator := context.allocator) -> (
     }
     defer cgltf.free(data)
 
-    result = make([]Gltf_Extra_Data, len(data.materials), allocator)
-    for material, material_index in data.materials {
+    result = make(map[string]Gltf_Extra_Data, allocator)
+    for material in data.materials {
+        if material.name == nil {
+            continue
+        }
+        extra: Gltf_Extra_Data
         if material.has_dispersion {
-            result[material_index].dispersion = material.dispersion.dispersion
+            extra.dispersion = material.dispersion.dispersion
         }
         if material.has_iridescence {
-            result[material_index].iridescence_factor = material.iridescence.iridescence_factor
-            result[material_index].iridescence_ior = material.iridescence.iridescence_ior
-            result[material_index].iridescence_thickness = material.iridescence.iridescence_thickness_max
+            extra.iridescence_factor = material.iridescence.iridescence_factor
+            extra.iridescence_ior = material.iridescence.iridescence_ior
+            extra.iridescence_thickness = material.iridescence.iridescence_thickness_max
         }
+        if material.has_volume {
+            extra.attenuation_color = material.volume.attenuation_color
+            extra.attenuation_distance = material.volume.attenuation_distance
+        }
+        result[strings.clone(string(material.name), allocator)] = extra
     }
     return
 }
@@ -320,7 +334,10 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
     }
 
     extra_data := gltf_read_extra_data(path)
-    defer delete(extra_data)
+    defer {
+        for name in extra_data do delete(name)
+        delete(extra_data)
+    }
 
     for material_index: u32 = 0; material_index < ai_scene.mNumMaterials; material_index += 1 {
         material := ai_scene.mMaterials[material_index]
@@ -333,6 +350,8 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
         iridescence_factor := f32(0.0)
         iridescence_ior := f32(1.3)
         iridescence_thickness := f32(400.0)
+        attenuation_color := [3]f32{1, 1, 1}
+        attenuation_distance := f32(0)
         bsdf_type := Material_BSDF.Disney
         
         ai_albedo: ai.Color4D
@@ -354,11 +373,16 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
         if ai.GetMaterialFloat(material, ai.MATKEY_TRANSMISSION_FACTOR, 0, 0, &transmission) == .SUCCESS && transmission > 0 {
             bsdf_type = Material_BSDF.Glass
         }
-        if material_index < u32(len(extra_data)) {
-            dispersion = extra_data[material_index].dispersion
-            iridescence_factor = extra_data[material_index].iridescence_factor
-            iridescence_ior = extra_data[material_index].iridescence_ior
-            iridescence_thickness = extra_data[material_index].iridescence_thickness
+        
+        material_name: ai.String
+        ai.GetMaterialString(material, ai.MATKEY_NAME, 0, 0, &material_name)
+        if extra, has_extra := extra_data[string(cstring(rawptr(&material_name.data[0])))]; has_extra {
+            dispersion = extra.dispersion
+            iridescence_factor = extra.iridescence_factor
+            iridescence_ior = extra.iridescence_ior
+            iridescence_thickness = extra.iridescence_thickness
+            attenuation_color = extra.attenuation_color
+            attenuation_distance = extra.attenuation_distance
         }
 
         mp_add_material(&scene.material_pool, Material_Info {
@@ -371,6 +395,8 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
             iridescence_factor = iridescence_factor,
             iridescence_ior = iridescence_ior,
             iridescence_thickness = iridescence_thickness,
+            attenuation_color = attenuation_color,
+            attenuation_distance = attenuation_distance,
             albedo_texture_index = ai_texture_load(cmd, &scene, ai_scene, path, material, .DIFFUSE),
             emission_texture_index = ai_texture_load(cmd, &scene, ai_scene, path, material, .EMISSIVE),
             metallic_texture_index = ai_texture_load(cmd, &scene, ai_scene, path, material, .METALNESS),

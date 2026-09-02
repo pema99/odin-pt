@@ -38,6 +38,7 @@ void trace<let MODE : SpectralMode>(uint3 id)
     float3 ray_direction = normalize(forward + (uv.x * aspect * right + uv.y * up) * fov_scale);
     float4 throughput = 1;
     float4 density_to_hero_ratio = 1;
+    float4 medium_absorption = 0.0;
 
     float4 wavelengths = 0;
     SpectrumBasis spectrum_basis = SpectrumBasis();
@@ -55,10 +56,14 @@ void trace<let MODE : SpectralMode>(uint3 id)
         {
             HitAttributes attributes = get_hit_attributes(hit, ray_origin, ray_direction);
             MaterialInfo mat = get_material(attributes);
+            bool incoming_outside = hit.is_front_face;
             
             float3 view_direction = -ray_direction;
             float3 specular_normal = ensure_valid_specular_normal(attributes.geometric_normal, view_direction, attributes.normal);
-            BSDF bsdf = get_material_bsdf<MODE>(mat, spectrum_basis, hit.is_front_face, attributes.normal, specular_normal);
+            BSDF bsdf = get_material_bsdf<MODE>(mat, spectrum_basis, incoming_outside, attributes.normal, specular_normal);
+
+            // Lambert-beer
+            throughput *= exp(-medium_absorption * hit.distance);
 
             // Add emission
             if (any(mat.emission > 0.0))
@@ -98,10 +103,20 @@ void trace<let MODE : SpectralMode>(uint3 id)
                 throughput *= rcp(russian_roulette_probability);
             }
 
+            // Update medium
+            bool outgoing_transmitted = dot(sample_direction, attributes.geometric_normal) < 0.0;
+            if (outgoing_transmitted)
+            {
+                if (incoming_outside) // air -> inside volume
+                    medium_absorption = get_material_absorption<MODE>(mat, spectrum_basis);
+                else // inside volume -> air
+                    medium_absorption = 0.0;
+            }
+            
             // Update ray for next bounce
-            float3 bias_normal = dot(sample_direction, attributes.geometric_normal) > 0.0 
-                ? attributes.geometric_normal
-                : -attributes.geometric_normal;
+            float3 bias_normal = outgoing_transmitted 
+                ? -attributes.geometric_normal
+                : attributes.geometric_normal;
             ray_origin = apply_normal_bias(attributes.position, bias_normal);
             ray_direction = sample_direction;
         }

@@ -16,6 +16,8 @@ public struct MaterialInfo
     public float iridescence_factor;
     public float iridescence_ior;
     public float iridescence_thickness;
+    public float3 attenuation_color;
+    public float attenuation_distance;
     public uint albedo_texture_index;
     public uint emission_texture_index;
     public uint metallic_texture_index;
@@ -56,6 +58,21 @@ public MaterialInfo get_material(inout HitAttributes attributes)
             + attributes.normal * normal_tex.z);
     }
     return mat;
+}
+
+public float4 get_material_absorption<let MODE : SpectralMode>(MaterialInfo mat, SpectrumBasis spectrum_basis)
+{
+    if (mat.attenuation_distance <= 0.0)
+        return 0.0;
+
+    float4 transmittance;
+    if (MODE == SpectralMode.RGB)
+        transmittance = float4(mat.attenuation_color, 1.0);
+    else
+        transmittance = upsample_ergb<MODE>(mat.attenuation_color, spectrum_basis);
+
+    // https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_volume/README.md#attenuation
+    return -log(transmittance) / mat.attenuation_distance;
 }
 
 public BSDF get_material_bsdf<let MODE : SpectralMode>(MaterialInfo mat, SpectrumBasis spectrum_basis, bool entering, float3 normal, float3 specular_normal)
