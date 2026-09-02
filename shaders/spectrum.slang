@@ -10,6 +10,30 @@ public enum SpectralMode
     Spectral = 1,
 }
 
+// cache some stuff so we can build it once per path..
+public struct SpectrumBasis
+{
+    // The sampled wavelengths
+    public float4 wavelengths;
+
+    // The spectral primaries evaluated at the sampled wavelengths.
+    // "How much light does each primary reflect at this wavelength"
+    public float3 primaries[4];
+
+    // CIE matching functions evaluated at the sampled wavelengths.
+    // "How much does a unit of light at this wavelength contribute to X,Y,Z"
+    public float3 xyz[4];
+
+    public __init()
+    {
+        wavelengths = 0;
+        for (int i = 0; i < 4; ++i)
+        {
+            primaries[i] = 0;
+            xyz[i] = 0;
+        }
+    }
+}
 
 // (e)RGB -> Spectrum or RGB
 // eRGB means RGB with illuminant E as the whitepoint
@@ -127,6 +151,33 @@ public float4 dispersive_ior(float ior, float dispersion, float4 wavelengths)
     return max(ior + (ior - 1.0) * rcp_abbe_number * (523655 / (wavelengths * wavelengths) - 1.5168), 1.0);
 }
 
+// CIE XYZ -> linear sRGB, but scaled such that XYZ (1,1,1) = sRGB (1,1,1). Same primaries.
+// White point is illuminant E (https://en.wikipedia.org/wiki/Standard_illuminant#Illuminant_E)
+// https://github.com/mmp/pbrt-v4/blob/master/src/pbrt/cmd/rgb2spec_opt.cpp#L205
+public float3 xyz_to_ergb(float3 xyz)
+{
+    float3 rgb;
+    rgb.r = dot(float3(2.689989, -1.276020, -0.413844), xyz);
+    rgb.g = dot(float3(-1.022095, 1.978261, 0.043821), xyz);
+    rgb.b = dot(float3(0.061203, -0.224411, 1.162859), xyz);
+    return rgb;
+}
+
+// Fourier transform of the CIE XYZ matching functions, evaluated at the frequency of an OPD.
+// from https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_iridescence/README.md
+// originally from Belcour et al, 2017
+public float3 ergb_opd_sensitivity(float optical_path_difference, float3 shift)
+{
+    float phase = 2.0 * PI * optical_path_difference * 1.0e-9;
+    float3 val = float3(5.4856e-13, 4.4201e-13, 5.2481e-13);
+    float3 pos = float3(1.6810e+06, 1.7953e+06, 2.2084e+06);
+    float3 var = float3(4.3278e+09, 9.3046e+09, 6.6121e+09);
+
+    float3 xyz = val * sqrt(2.0 * PI * var) * cos(pos * phase + shift) * exp(-(phase*phase) * var);
+    xyz.x += 9.7470e-14 * sqrt(2.0 * PI * 4.5282e+09) * cos(2.2399e+06 * phase + shift[0]) * exp(-4.5282e+09 * (phase*phase));
+    return xyz_to_ergb(xyz / 1.0685e-7);
+}
+
 // === Helpers ===
 
 static const float MIN_VISIBLE_WAVELENGTH = 380.0;
@@ -174,43 +225,6 @@ void cie_matching(float4 wavelengths,
     xyz_1 = float3(x.y, y.y, z.y);
     xyz_2 = float3(x.z, y.z, z.z);
     xyz_3 = float3(x.w, y.w, z.w);
-}
-
-// CIE XYZ -> linear sRGB, but scaled such that XYZ (1,1,1) = sRGB (1,1,1). Same primaries.
-// White point is illuminant E (https://en.wikipedia.org/wiki/Standard_illuminant#Illuminant_E)
-// https://github.com/mmp/pbrt-v4/blob/master/src/pbrt/cmd/rgb2spec_opt.cpp#L205
-float3 xyz_to_ergb(float3 xyz)
-{
-    float3 rgb;
-    rgb.r = dot(float3( 2.689989, -1.276020, -0.413844), xyz);
-    rgb.g = dot(float3(-1.022095,  1.978261,  0.043821), xyz);
-    rgb.b = dot(float3( 0.061203, -0.224411,  1.162859), xyz);
-    return rgb;
-}
-
-// cache some stuff so we can build it once per path..
-public struct SpectrumBasis
-{
-    // The sampled wavelengths
-    public float4 wavelengths;
-
-    // The spectral primaries evaluated at the sampled wavelengths.
-    // "How much light does each primary reflect at this wavelength"
-    public float3 primaries[4];
-
-    // CIE matching functions evaluated at the sampled wavelengths.
-    // "How much does a unit of light at this wavelength contribute to X,Y,Z"
-    public float3 xyz[4];
-
-    public __init()
-    {
-        wavelengths = 0;
-        for (int i = 0; i < 4; ++i)
-        {
-            primaries[i] = 0;
-            xyz[i] = 0;
-        }
-    }
 }
 
 // Given an (e)RGB color, how much light is reflected at each of the sampled wavelengths?

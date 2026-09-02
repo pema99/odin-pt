@@ -100,54 +100,155 @@ float4 fresnel0_to_ior(float4 f0)
 // A Practical Extension to Microfacet Theory for the Modeling of Varying Iridescence,
 // Belcour & Barla, 2017, (eq. 10-11 + supplemental code)
 // https://hal.science/hal-01518344/document
-float4 fresnel_thin_film(float v_dot_h, float eta_film, float4 eta_base, float thickness, float4 wavelengths)
+float4 fresnel_thin_film<let MODE : SpectralMode>(
+    float v_dot_h, float4 ior_outside, float ior_film, float4 eta_base, float thickness, float4 wavelengths)
 {
+    float4 eta_film = ior_film / ior_outside;
+
     // https://en.wikipedia.org/wiki/Snell%27s_law#Vector_form
-    float cos_theta_film_sq = 1.0 - (1.0 - v_dot_h * v_dot_h) / (eta_film * eta_film);
-    if (cos_theta_film_sq < 0.0)
-        return 1.0;
-    float cos_theta_film = sqrt(cos_theta_film_sq);
-    float4 cos_theta_base = sqrt(1.0 - (1.0 - v_dot_h * v_dot_h) / (eta_base * eta_base));
+    float4 cos_theta_film_sq = 1.0 - (1.0 - v_dot_h * v_dot_h) / (eta_film * eta_film);
+    float4 cos_theta_film = sqrt(max(cos_theta_film_sq, 0.0));
+    float4 cos_theta_base = sqrt(max(1.0 - (1.0 - v_dot_h * v_dot_h) / (eta_base * eta_base), 0.0));
 
     // 12 = air->film, 23 = film->base
     // https://en.wikipedia.org/wiki/Fresnel_equations#Complex_amplitude_reflection_and_transmission_coefficients
-    float r12_s = (v_dot_h - eta_film * cos_theta_film) / (v_dot_h + eta_film * cos_theta_film);
-    float r12_p = (eta_film * v_dot_h - cos_theta_film) / (eta_film * v_dot_h + cos_theta_film);
+    float4 r12_s = (v_dot_h - eta_film * cos_theta_film) / (v_dot_h + eta_film * cos_theta_film);
+    float4 r12_p = (eta_film * v_dot_h - cos_theta_film) / (eta_film * v_dot_h + cos_theta_film);
     float4 r23_s = (eta_film * cos_theta_film - eta_base * cos_theta_base)
         / (eta_film * cos_theta_film + eta_base * cos_theta_base);
     float4 r23_p = (eta_base * cos_theta_film - eta_film * cos_theta_base)
         / (eta_base * cos_theta_film + eta_film * cos_theta_base);
 
     // signed amplitude -> phase, power
-    float R12_s = r12_s * r12_s;
-    float R12_p = r12_p * r12_p;
+    float4 R12_s = r12_s * r12_s;
+    float4 R12_p = r12_p * r12_p;
     float4 R23_s = r23_s * r23_s;
     float4 R23_p = r23_p * r23_p;
-    float T121_s = 1.0 - R12_s;
-    float T121_p = 1.0 - R12_p;
-    float phi21_s = PI - (r12_s < 0.0 ? PI : 0.0);
-    float phi21_p = PI - (r12_p < 0.0 ? PI : 0.0);
+    float4 T121_s = 1.0 - R12_s;
+    float4 T121_p = 1.0 - R12_p;
+    float4 phi21_s = PI - select(r12_s < 0.0, PI, 0.0);
+    float4 phi21_p = PI - select(r12_p < 0.0, PI, 0.0);
     float4 phi23_s = select(r23_s < 0.0, PI, 0.0);
     float4 phi23_p = select(r23_p < 0.0, PI, 0.0);
 
     // https://en.wikipedia.org/wiki/Thin-film_interference#Theory
-    // Dphi = (2pi / λ) * optical_path_difference = 4pi * eta * d * cos(theta_2) / λ
-    float4 Dphi = 4.0 * PI * eta_film * thickness * cos_theta_film / wavelengths;
+    float4 optical_path_difference = 2.0 * ior_film * thickness * cos_theta_film;
+    float4 Dphi = 2.0 * PI * optical_path_difference / wavelengths;
 
-    // Airy summation
-    float4 r123_s = sqrt(R12_s * R23_s);
-    float4 Rs_s = T121_s * T121_s * R23_s / (1.0 - R12_s * R23_s);
-    float4 cosP_s = cos(Dphi + phi23_s + phi21_s);
-    float4 irid_s = (r123_s * cosP_s - r123_s * r123_s) / (1.0 - 2.0 * r123_s * cosP_s + r123_s * r123_s);
-    float4 I_s = R12_s + Rs_s + 2.0 * (Rs_s - T121_s) * irid_s;
-    float4 r123_p = sqrt(R12_p * R23_p);
-    float4 Rs_p = T121_p * T121_p * R23_p / (1.0 - R12_p * R23_p);
-    float4 cosP_p = cos(Dphi + phi23_p + phi21_p);
-    float4 irid_p = (r123_p * cosP_p - r123_p * r123_p) / (1.0 - 2.0 * r123_p * cosP_p + r123_p * r123_p);
-    float4 I_p = R12_p + Rs_p + 2.0 * (Rs_p - T121_p) * irid_p;
+    // Start airy summation..
+    float4 R123_s = min(R12_s * R23_s, 0.9999);
+    float4 r123_s = sqrt(R123_s);
+    float4 Rs_s = T121_s * T121_s * R23_s / (1.0 - R123_s);
+    float4 R123_p = min(R12_p * R23_p, 0.9999);
+    float4 r123_p = sqrt(R123_p);
+    float4 Rs_p = T121_p * T121_p * R23_p / (1.0 - R123_p);
 
-    // https://en.wikipedia.org/wiki/Fresnel_equations#Power_(intensity)_reflection_and_transmission_coefficients
-    return 0.5 * (I_s + I_p);
+    if (MODE == SpectralMode.RGB)
+    {
+        // Adapted from glTF spec, section "Analytical spectral integration"
+        // https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_iridescence/README.md
+        // considers polarization because we use real fresnel...
+        float3 phi_s = phi21_s.rgb + phi23_s.rgb;
+        float3 phi_p = phi21_p.rgb + phi23_p.rgb;
+        float3 rgb_s = R12_s.rgb + Rs_s.rgb;
+        float3 rgb_p = R12_p.rgb + Rs_p.rgb;
+        float3 Cm_s = Rs_s.rgb - T121_s.rgb;
+        float3 Cm_p = Rs_p.rgb - T121_p.rgb;
+        for (int m = 1; m <= 2; m++)
+        {
+            Cm_s *= r123_s.rgb;
+            Cm_p *= r123_p.rgb;
+            rgb_s += Cm_s * 2.0 * ergb_opd_sensitivity(m * optical_path_difference.x, m * phi_s);
+            rgb_p += Cm_p * 2.0 * ergb_opd_sensitivity(m * optical_path_difference.x, m * phi_p);
+        }
+        return select(cos_theta_film_sq < 0.0, 1.0, float4(max(0.5 * (rgb_s + rgb_p), 0.0), 0.0));
+    }
+    else
+    {
+        // .. end of airy summation
+        float4 cosP_s = cos(Dphi + phi23_s + phi21_s);
+        float4 irid_s = (r123_s * cosP_s - r123_s * r123_s) / (1.0 - 2.0 * r123_s * cosP_s + r123_s * r123_s);
+        float4 I_s = R12_s + Rs_s + 2.0 * (Rs_s - T121_s) * irid_s;
+        float4 cosP_p = cos(Dphi + phi23_p + phi21_p);
+        float4 irid_p = (r123_p * cosP_p - r123_p * r123_p) / (1.0 - 2.0 * r123_p * cosP_p + r123_p * r123_p);
+        float4 I_p = R12_p + Rs_p + 2.0 * (Rs_p - T121_p) * irid_p;
+        return select(cos_theta_film_sq < 0.0, 1.0, 0.5 * (I_s + I_p));
+    }
+}
+
+public interface Fresnel
+{
+    float4 evaluate(float v_dot_h);
+    float4 base_ior();
+    float4 normal_incidence();
+}
+
+public struct SchlickFresnel : Fresnel
+{
+    public float4 f0;
+
+    public float4 evaluate(float v_dot_h)
+    {
+        return fresnel_schlick(v_dot_h, f0);
+    }
+
+    public float4 base_ior()
+    {
+        return fresnel0_to_ior(f0 + 0.0001);
+    }
+
+    public float4 normal_incidence()
+    {
+        return f0;
+    }
+}
+
+public struct DielectricFresnel : Fresnel
+{
+    public float4 eta;
+
+    public float4 evaluate(float v_dot_h)
+    {
+        return fresnel_dielectric(v_dot_h, eta);
+    }
+
+    public float4 base_ior()
+    {
+        return eta;
+    }
+
+    public float4 normal_incidence()
+    {
+        return fresnel_dielectric(1.0, eta);
+    }
+}
+
+public struct ThinFilmFresnel<let MODE : SpectralMode, F : Fresnel> : Fresnel
+{
+    public F base;
+    public float factor;
+    public float4 ior_outside;
+    public float ior_film;
+    public float thickness;
+    public float4 wavelengths;
+
+    public float4 evaluate(float v_dot_h)
+    {
+        if (factor <= 0.0)
+            return base.evaluate(v_dot_h);
+        float4 thin_film = fresnel_thin_film<MODE>(v_dot_h, ior_outside, ior_film, base.base_ior(), thickness, wavelengths);
+        return lerp(base.evaluate(v_dot_h), thin_film, factor);
+    }
+
+    public float4 base_ior()
+    {
+        return base.base_ior();
+    }
+
+    public float4 normal_incidence()
+    {
+        return base.normal_incidence();
+    }
 }
 
 // Microfacet Models for Refraction through Rough Surfaces, Walter et al., 2007, (eq. 20)
@@ -245,19 +346,11 @@ float ggx_vndf_pdf(float n_dot_v, float n_dot_h, float alpha)
     return g1 * ggx_ndf(n_dot_h, alpha) / (4.0 * n_dot_v);
 }
 
-public struct CookTorranceBSDF : BSDF
+public struct CookTorranceBSDF<F : Fresnel> : BSDF
 {
-    // Base
-    public float4 f0;
+    public F fresnel;
     public float roughness;
     public float3 normal;
-
-    // Thin film
-    public float4 wavelengths;
-    public float4 thin_film_eta_base;
-    public float thin_film_factor;
-    public float thin_film_ior;
-    public float thin_film_thickness;
 
     public void evaluate(float3 view_direction, float3 sample_direction,
         out float4 value_times_cosine, out float4 density)
@@ -275,17 +368,10 @@ public struct CookTorranceBSDF : BSDF
         float v_dot_h = dot(view_direction, half_vector);
         density = ggx_vndf_pdf(n_dot_v, n_dot_h, alpha);
 
-        float4 fresnel = fresnel_schlick(v_dot_h, f0);
-        if (thin_film_factor > 0.0)
-        {
-            float4 thin_film = fresnel_thin_film(v_dot_h, thin_film_ior, thin_film_eta_base, thin_film_thickness, wavelengths);
-            fresnel = lerp(fresnel, thin_film, 0);
-        }
-
         float2 ab = ggx_ss_directional_albedo_scale_bias(roughness, n_dot_v);
-        value_times_cosine = 
-            turquin_ss_compensation(f0, 1.0 * ab.x + ab.y)
-            * fresnel
+        value_times_cosine =
+            turquin_ss_compensation(fresnel.normal_incidence(), 1.0 * ab.x + ab.y)
+            * fresnel.evaluate(v_dot_h)
             * cook_torrance_reflection(n_dot_l, n_dot_v, n_dot_h, alpha)
             * n_dot_l;
     }
@@ -430,9 +516,9 @@ public struct CoatingWeights : BSDFMixWeights
     }
 }
 
-public typealias DisneyBSDF = MixtureBSDF<CookTorranceBSDF, LambertianBSDF, CoatingWeights>;
+public typealias DisneyBSDF<let MODE : SpectralMode> = MixtureBSDF<CookTorranceBSDF<ThinFilmFresnel<MODE, SchlickFresnel>>, LambertianBSDF, CoatingWeights>;
 
-public DisneyBSDF make_disney_bsdf(
+public DisneyBSDF<MODE> make_disney_bsdf<let MODE : SpectralMode>(
     float4 albedo,
     float metallic,
     float roughness,
@@ -444,24 +530,23 @@ public DisneyBSDF make_disney_bsdf(
     float3 specular_normal,
     float4 wavelengths)
 {
-    DisneyBSDF m;
+    DisneyBSDF<MODE> m;
 
     float f0_dielectric_sqrt = (ior - 1.0) / (ior + 1.0);
     float f0_dielectric = f0_dielectric_sqrt * f0_dielectric_sqrt;
-    m.bsdf_a.f0 = lerp(f0_dielectric, albedo, metallic);
+    m.bsdf_a.fresnel.base.f0 = lerp(f0_dielectric, albedo, metallic);
+    m.bsdf_a.fresnel.factor = thin_film_factor;
+    m.bsdf_a.fresnel.ior_outside = 1.0;
+    m.bsdf_a.fresnel.ior_film = thin_film_ior;
+    m.bsdf_a.fresnel.thickness = thin_film_thickness;
+    m.bsdf_a.fresnel.wavelengths = wavelengths;
     m.bsdf_a.roughness = roughness;
     m.bsdf_a.normal = specular_normal;
-
-    m.bsdf_a.wavelengths = wavelengths;
-    m.bsdf_a.thin_film_eta_base = fresnel0_to_ior(m.bsdf_a.f0 + 0.0001);
-    m.bsdf_a.thin_film_factor = thin_film_factor;
-    m.bsdf_a.thin_film_ior = thin_film_ior;
-    m.bsdf_a.thin_film_thickness = thin_film_thickness;
 
     m.bsdf_b.albedo = albedo;
     m.bsdf_b.normal = normal;
 
-    m.weighting.f0 = m.bsdf_a.f0;
+    m.weighting.f0 = m.bsdf_a.fresnel.base.f0;
     m.weighting.roughness = roughness;
     m.weighting.base_weight = 1.0 - metallic;
     m.weighting.base_albedo = albedo;
@@ -491,16 +576,17 @@ float4 fresnel_dielectric(float c, float4 eta)
     return 0.5 * a * a * (1.0 + b * b);
 }
 
-public struct GlassBSDF : BSDF
+public struct GlassBSDF<F : Fresnel> : BSDF
 {
+    public F fresnel;
     public float roughness;
     public float4 color;
-    public float4 eta;
     public float3 normal;
 
     public void evaluate(float3 view_direction, float3 sample_direction,
         out float4 value_times_cosine, out float4 density)
     {
+        float4 eta = fresnel.base_ior();
         value_times_cosine = 0.0;
         density = 0.0;
         if (all(eta == 1.0)) {
@@ -522,9 +608,9 @@ public struct GlassBSDF : BSDF
             float v_dot_h = dot(view_direction, half_vector);
 
             // Must match probability in sample()
-            float4 fresnel = fresnel_dielectric(v_dot_h, eta);
-            density = fresnel * ggx_vndf_pdf(n_dot_v, n_dot_h, alpha);
-            value_times_cosine = fresnel * cook_torrance_reflection(n_dot_l, n_dot_v, n_dot_h, alpha) * n_dot_l;
+            float4 reflectance = fresnel.evaluate(v_dot_h);
+            density = reflectance * ggx_vndf_pdf(n_dot_v, n_dot_h, alpha);
+            value_times_cosine = reflectance * cook_torrance_reflection(n_dot_l, n_dot_v, n_dot_h, alpha) * n_dot_l;
         }
         else
         {
@@ -548,18 +634,18 @@ public struct GlassBSDF : BSDF
                 if (v_dot_h <= 0.0 || l_dot_h >= 0.0)
                     continue;
 
-                float fresnel = fresnel_dielectric(v_dot_h, eta[i]);
+                float reflectance = fresnel.evaluate(v_dot_h)[i];
                 float distribution = ggx_ndf(n_dot_h, alpha);
                 float denominator = v_dot_h + eta[i] * l_dot_h;
 
                 // Walter et al., 2007, (eq. 21)
                 transmission[i] = abs(v_dot_h * l_dot_h) / abs(n_dot_v * n_dot_l)
-                    * (1.0 - fresnel) * geometry * distribution
+                    * (1.0 - reflectance) * geometry * distribution
                     / (denominator * denominator);
 
                 // Walter et al., 2007, (eq. 17)
                 float visible_normal_density = masking * distribution * v_dot_h / n_dot_v;
-                density[i] = (1.0 - fresnel) * visible_normal_density * eta[i] * eta[i]
+                density[i] = (1.0 - reflectance) * visible_normal_density * eta[i] * eta[i]
                     * abs(l_dot_h) / (denominator * denominator);
             }
 
@@ -577,6 +663,7 @@ public struct GlassBSDF : BSDF
     public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
         out float3 sample_direction, out float4 value_times_cosine, out float4 density)
     {
+        float4 eta = fresnel.base_ior();
         if (all(eta == 1.0)) {
             // "pass through" material, just tints
             sample_direction = -view_direction;
@@ -591,7 +678,7 @@ public struct GlassBSDF : BSDF
         float3 local_half = sample_ggx_vndf(local_view, alpha, random_sample.x, random_sample.y);
 
         // Choose reflection vs refraction with fresnel
-        float reflection_probability = fresnel_dielectric(dot(local_view, local_half), eta).x;
+        float reflection_probability = fresnel.evaluate(dot(local_view, local_half)).x;
         float3 local_sample;
         if (frac(random_sample.x * 1024.0) < reflection_probability) // reuse rng
         {
@@ -612,4 +699,28 @@ public struct GlassBSDF : BSDF
             density = 0.0;
         }
     }
+}
+
+public GlassBSDF<ThinFilmFresnel<MODE, DielectricFresnel>> make_glass_bsdf<let MODE : SpectralMode>(
+    float roughness,
+    float4 color,
+    float4 ior,
+    bool entering,
+    float thin_film_factor,
+    float thin_film_ior,
+    float thin_film_thickness,
+    float3 normal,
+    float4 wavelengths)
+{
+    GlassBSDF<ThinFilmFresnel<MODE, DielectricFresnel>> g;
+    g.fresnel.base.eta = entering ? ior : rcp(ior);
+    g.fresnel.factor = thin_film_factor;
+    g.fresnel.ior_outside = entering ? 1.0 : ior;
+    g.fresnel.ior_film = thin_film_ior;
+    g.fresnel.thickness = thin_film_thickness;
+    g.fresnel.wavelengths = wavelengths;
+    g.roughness = roughness;
+    g.color = color;
+    g.normal = normal;
+    return g;
 }
