@@ -163,21 +163,6 @@ public float3 xyz_to_ergb(float3 xyz)
     return rgb;
 }
 
-// Fourier transform of the CIE XYZ matching functions, evaluated at the frequency of an OPD.
-// from https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_iridescence/README.md
-// originally from Belcour et al, 2017
-public float3 ergb_opd_sensitivity(float optical_path_difference, float3 shift)
-{
-    float phase = 2.0 * PI * optical_path_difference * 1.0e-9;
-    float3 val = float3(5.4856e-13, 4.4201e-13, 5.2481e-13);
-    float3 pos = float3(1.6810e+06, 1.7953e+06, 2.2084e+06);
-    float3 var = float3(4.3278e+09, 9.3046e+09, 6.6121e+09);
-
-    float3 xyz = val * sqrt(2.0 * PI * var) * cos(pos * phase + shift) * exp(-(phase*phase) * var);
-    xyz.x += 9.7470e-14 * sqrt(2.0 * PI * 4.5282e+09) * cos(2.2399e+06 * phase + shift[0]) * exp(-4.5282e+09 * (phase*phase));
-    return xyz_to_ergb(xyz / 1.0685e-7);
-}
-
 // === Helpers ===
 
 static const float MIN_VISIBLE_WAVELENGTH = 380.0;

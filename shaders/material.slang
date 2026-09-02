@@ -62,12 +62,12 @@ public BSDF get_material_bsdf<let MODE : SpectralMode>(MaterialInfo mat, Spectru
 {
     float4 albedo_spectrum = upsample_ergb<MODE>(mat.albedo, spectrum_basis);
 
-    BSDF bsdf = make_disney_bsdf<MODE>(
+    BSDF bsdf = make_disney_bsdf(
         albedo_spectrum,
         mat.metallic,
         mat.roughness,
         mat.index_of_refraction,
-        mat.iridescence_factor,
+        MODE == SpectralMode.RGB ? 0.0 : mat.iridescence_factor,
         mat.iridescence_ior,
         mat.iridescence_thickness,
         normal,
@@ -81,12 +81,12 @@ public BSDF get_material_bsdf<let MODE : SpectralMode>(MaterialInfo mat, Spectru
             ior = mat.index_of_refraction;
         else
             ior = dispersive_ior(mat.index_of_refraction, mat.dispersion, spectrum_basis.wavelengths);
-        bsdf = make_glass_bsdf<MODE>(
+        bsdf = make_glass_bsdf(
             mat.roughness,
             albedo_spectrum,
             ior,
             entering,
-            mat.iridescence_factor,
+            MODE == SpectralMode.RGB ? 0.0 : mat.iridescence_factor,
             mat.iridescence_ior,
             mat.iridescence_thickness,
             specular_normal,
