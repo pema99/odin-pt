@@ -216,7 +216,7 @@ scene_load_node :: proc(scene: ^Scene, node: ^ai.Node, transform: ai.Matrix4x4) 
             blas = scene.blases[blas_index],
             transform = transform,
             id = gp_add_instance(&scene.geometry_pool, blas_index, transform, emissive),
-            double_sided = bool(material.double_sided),
+            double_sided = bool(material.double_sided) || material.bsdf_type == .Glass,
         }
         append(&scene.instances, instance)
     }
