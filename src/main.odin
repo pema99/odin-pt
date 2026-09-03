@@ -69,6 +69,7 @@ App_State :: struct {
     spectral_mode: Spectral_Mode,
     nee_mode: NEE_Mode,
     tonemapper: Tonemapper,
+    exposure: f32,
 
     // GPU state
     cmd: ^gpu.Cmd,
@@ -296,9 +297,10 @@ app_do_frame :: proc(state: ^App_State) {
 
         // Tonemap
         display := state.output
-        if state.tonemapper != Tonemapper.None {
+        if state.tonemapper != Tonemapper.None || state.exposure != 0 {
             gpu.set_uniform(cmd, postfx, "main", "screen_size", [2]u32{state.output.width, state.output.height})
             gpu.set_uniform(cmd, postfx, "main", "tonemapper", state.tonemapper)
+            gpu.set_uniform(cmd, postfx, "main", "exposure", state.exposure)
             gpu.set_texture(cmd, postfx, "main", "input", state.output)
             gpu.set_texture(cmd, postfx, "main", "output", state.output_postfx)
             gpu.dispatch(cmd, postfx, "main", state.num_groups.x, state.num_groups.y)
@@ -338,6 +340,9 @@ app_do_gui :: proc(state: ^App_State) -> bool {
     tonemapper := i32(state.tonemapper)
     if imgui.ComboChar("Tonemapper", &tonemapper, raw_data(tonemapper_names[:]), i32(len(tonemapper_names))) {
         state.tonemapper = Tonemapper(tonemapper)
+    }
+    if imgui.SliderFloat("Exposure", &state.exposure, -5.0, 5.0, "%.2f") {
+        state.exposure = math.round(state.exposure / 0.05) * 0.05
     }
     
     if imgui.ComboChar("Scene", &state.scene_index, raw_data(state.scene_names[:]), i32(len(state.scene_names))) {

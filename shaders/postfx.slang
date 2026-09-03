@@ -1,6 +1,7 @@
 RWTexture2D<float4> input;
 RWTexture2D<float4> output;
 uniform Tonemapper tonemapper;
+uniform float exposure;
 uniform uint2 screen_size;
 
 // Narkowicz ACES https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
@@ -18,6 +19,8 @@ float3 aces_narkowicz(float3 x)
 // Hill ACES https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl
 float3 aces_hill(float3 x)
 {
+    x *= 1.8;
+
     float3x3 aces_input = float3x3(
         float3(0.59719, 0.35458, 0.04823),
         float3(0.07600, 0.90834, 0.01566),
@@ -82,7 +85,7 @@ float3 uncharted_partial(float3 x)
     return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
 }
 
-// i forgor where i got this
+// 64.github.io/tonemapping
 float3 uncharted(float3 v)
 {
     float exposure_bias = 2.0;
@@ -111,6 +114,7 @@ void main(uint2 id: SV_DispatchThreadID)
         return;
 
     float4 value = input[id.xy];
+    value.rgb *= exp2(exposure);
     switch (tonemapper)
     {
         case Tonemapper.Reinhard:
