@@ -21,6 +21,7 @@ public struct MaterialInfo
     public uint metallic_texture_index;
     public uint roughness_texture_index;
     public uint normal_texture_index;
+    public bool double_sided;
     public BSDFType bsdf_type;
 };
 
@@ -108,9 +109,10 @@ public void get_hit_info(Hit hit, float3 ray_origin, float3 ray_direction, out H
     }
 }
 
-public float3 get_material_emission_fast(uint material_index, uint i0, uint i1, uint i2, float3 barycentrics)
+public float3 get_material_emission_fast(uint material_index, uint i0, uint i1, uint i2, float3 barycentrics, out bool double_sided)
 {
     MaterialInfo mat = materials[material_index];
+    double_sided = mat.double_sided;
     if (mat.emission_texture_index == MAX_UINT)
         return mat.emission;
     float2 uv = uvs[i0] * barycentrics.x + uvs[i1] * barycentrics.y + uvs[i2] * barycentrics.z;

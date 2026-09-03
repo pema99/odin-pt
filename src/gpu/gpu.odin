@@ -1091,11 +1091,12 @@ Tlas :: struct {
 }
 
 // One Blas placed in a Tlas. transform is a row-major 3x4, all zeros means identity.
-// id is what InstanceID() returns in the shader.
+// id is what InstanceID() returns in the shader. double_sided exempts the instance from back-face culling.
 Instance :: struct {
-	blas:      Blas,
-	transform: matrix[3, 4]f32,
-	id:        u32,
+	blas:         Blas,
+	transform:    matrix[3, 4]f32,
+	id:           u32,
+	double_sided: bool,
 }
 
 // Creates an empty BLAS. Build it with build_blas.
@@ -1157,6 +1158,7 @@ build_tlas :: proc(cmd: ^Cmd, t: ^Tlas, instances: []Instance, refit := false) {
 		for r in 0 ..< 3 do for c in 0 ..< 4 do v.transform.mat[r][c] = m[r, c]
 		v.instanceCustomIndex = inst.id
 		v.mask = 0xFF
+		if inst.double_sided do v.flags = vk.GeometryInstanceFlagKHR(1 << u32(vk.GeometryInstanceFlagKHR.TRIANGLE_FACING_CULL_DISABLE))
 		v.accelerationStructureReference = u64(inst.blas.address)
 	}
 	input_usage := vk.BufferUsageFlags{.ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR, .SHADER_DEVICE_ADDRESS}

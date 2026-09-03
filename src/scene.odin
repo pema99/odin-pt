@@ -137,6 +137,7 @@ Material_Info :: struct {
     metallic_texture_index: u32,
     roughness_texture_index: u32,
     normal_texture_index: u32,
+    double_sided: b32,
     bsdf_type: Material_BSDF, 
 }
 
@@ -215,6 +216,7 @@ scene_load_node :: proc(scene: ^Scene, node: ^ai.Node, transform: ai.Matrix4x4) 
             blas = scene.blases[blas_index],
             transform = transform,
             id = gp_add_instance(&scene.geometry_pool, blas_index, transform, emissive),
+            double_sided = bool(material.double_sided),
         }
         append(&scene.instances, instance)
     }
@@ -402,6 +404,7 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
         iridescence_thickness := f32(400.0)
         attenuation_color := [3]f32{1, 1, 1}
         attenuation_distance := f32(0)
+        double_sided := b32(false)
         bsdf_type := Material_BSDF.Disney
         
         ai_albedo: ai.Color4D
@@ -422,6 +425,10 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
         transmission: f32
         if ai.GetMaterialFloat(material, ai.MATKEY_TRANSMISSION_FACTOR, 0, 0, &transmission) == .SUCCESS && transmission > 0 {
             bsdf_type = Material_BSDF.Glass
+        }
+        two_sided: i32
+        if ai.GetMaterialInteger(material, ai.MATKEY_TWOSIDED, 0, 0, &two_sided) == .SUCCESS {
+            double_sided = b32(two_sided != 0)
         }
 
         material_name: ai.String
@@ -447,6 +454,7 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
             iridescence_thickness = iridescence_thickness,
             attenuation_color = attenuation_color,
             attenuation_distance = attenuation_distance,
+            double_sided = double_sided,
             albedo_texture_index = ai_texture_load(cmd, &scene, ai_scene, path, material, .DIFFUSE),
             emission_texture_index = ai_texture_load(cmd, &scene, ai_scene, path, material, .EMISSIVE),
             metallic_texture_index = ai_texture_load(cmd, &scene, ai_scene, path, material, .METALNESS),

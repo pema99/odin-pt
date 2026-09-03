@@ -61,7 +61,8 @@ public LightSample sample_emissive_triangle(
     square_to_triangle(sq_point.x, sq_point.y);
 
     // Read emissive value
-    const float3 emission = get_material_emission_fast(geo.material_index, i0, i1, i2, float3(1.0 - sq_point.x - sq_point.y, sq_point.x, sq_point.y));
+    bool double_sided;
+    const float3 emission = get_material_emission_fast(geo.material_index, i0, i1, i2, float3(1.0 - sq_point.x - sq_point.y, sq_point.x, sq_point.y), double_sided);
     if (all(emission == 0.0))
         return light_sample;
 
@@ -77,6 +78,8 @@ public LightSample sample_emissive_triangle(
     float cos_theta_light = dot(geometric_normal, light_direction);
     if (cos_theta_light < 0.0)
     {
+        if (!double_sided)
+            return light_sample;
         geometric_normal = -geometric_normal;
         cos_theta_light = -cos_theta_light;
     }

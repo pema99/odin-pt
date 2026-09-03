@@ -43,8 +43,8 @@ public Hit trace_ray(float3 ray_origin, float3 ray_direction)
     primary_ray.TMin = 0.0;
     primary_ray.TMax = 1e30;
 
-    RayQuery<RAY_FLAG_NONE> query;
-    query.TraceRayInline(scene, RAY_FLAG_NONE, 0xff, primary_ray);
+    RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> query;
+    query.TraceRayInline(scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xff, primary_ray);
     query.Proceed();
 
     Hit hit = (Hit)0;
@@ -74,8 +74,8 @@ public bool trace_shadow_ray(
     occlusion_ray.TMin = 0.0;
     occlusion_ray.TMax = max_distance;
 
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
-    query.TraceRayInline(scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xff, occlusion_ray);
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES> query;
+    query.TraceRayInline(scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xff, occlusion_ray);
     query.Proceed();
 
     return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
