@@ -7,3 +7,7 @@ it's a path tracer, wew
 <img width="1074" height="654" alt="odin-pt_M0X1QdjVBT" src="https://github.com/user-attachments/assets/659c56e1-a584-45a0-9139-f03d7ade2a61" />
 <img width="1472" height="918" alt="odin-pt_idWWQnivsi" src="https://github.com/user-attachments/assets/d4fcaaef-52f6-4a56-9036-abd9e41c6843" />
 <img width="1119" height="846" alt="odin-pt_DL31kBThQo" src="https://github.com/user-attachments/assets/6b493a4a-a523-4e88-aa37-205b9d48ec29" />
+<img width="1746" height="899" alt="image" src="https://github.com/user-attachments/assets/2d994ee6-9517-4b1a-ae20-85db273a88dc" />
+<img width="1232" height="640" alt="image" src="https://github.com/user-attachments/assets/7daeeb5d-e935-4a79-b6d7-321f743719a5" />
+<img width="1103" height="654" alt="image" src="https://github.com/user-attachments/assets/cdbf7660-41fe-4512-a87d-73fd7f897336" />
+<img width="780" height="648" alt="image" src="https://github.com/user-attachments/assets/3c17b395-38ff-4029-b392-93ea45e6fc9e" />
