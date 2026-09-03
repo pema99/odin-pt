@@ -95,7 +95,7 @@ void trace<let MODE : SpectralMode>(uint3 id)
                 float2 pick_rng = kronecker_2d(id.xy, frame, RNG_DIMS_NEE_PICK + depth * RNG_DIMS_PER_BOUNCE);
                 float2 point_rng = kronecker_2d(id.xy, frame, RNG_DIMS_NEE_POINT + depth * RNG_DIMS_PER_BOUNCE);
                 LightSample nee_sample = sample_emissive_triangle(attributes.position, pick_rng, point_rng);
-                if (nee_sample.is_valid()) // TODO: Only diffuse bounce
+                if (nee_sample.is_valid())
                 {
                     float4 nee_bsdf_density, nee_bsdf_value_times_cosine;
                     bsdf.evaluate(
