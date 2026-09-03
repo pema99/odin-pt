@@ -128,7 +128,7 @@ app_init :: proc() -> App_State {
     }
 
     state.cmd = gpu.create_cmd()
-    state.last_shader_write, _ = os.last_write_time_by_name(state.shader_path)
+    state.last_shader_write = shaders_last_write()
     trace, trace_ok := gpu.compile_shader(state.shader_path)
     if !trace_ok {
         panic("failed to compile shaders/path_tracing.slang")
@@ -142,6 +142,18 @@ app_init :: proc() -> App_State {
     state.last_time = glfw.GetTime()
 
     return state
+}
+
+shaders_last_write :: proc() -> (newest: time.Time) {
+    f, _ := os.open("shaders")
+    defer os.close(f)
+    fis, _ := os.read_dir(f, -1, context.temp_allocator)
+    for fi in fis {
+        if strings.ends_with(fi.name, ".slang") && time.diff(newest, fi.modification_time) > 0 {
+            newest = fi.modification_time
+        }
+    }
+    return
 }
 
 app_load_scene :: proc(state: ^App_State, index: i32) {
@@ -194,7 +206,7 @@ app_tick :: proc(state: ^App_State) {
     if last_scene_write != state.last_scene_write {
         app_load_scene(state, state.scene_index)
     }
-    curr_shader_write, _ := os.last_write_time_by_name(state.shader_path)
+    curr_shader_write := shaders_last_write()
     if curr_shader_write != state.last_shader_write {
         state.last_shader_write = curr_shader_write
         if new_trace, ok := gpu.compile_shader(state.shader_path); ok {
