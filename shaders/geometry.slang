@@ -35,18 +35,6 @@ public struct Hit
     }
 }
 
-public struct HitAttributes
-{
-    public float3 position;
-    public float3 normal;
-    public float3 geometric_normal;
-    public float3 tangent;
-    public float2 uv;
-    public uint material_index;
-    public uint triangle_count;
-    public float triangle_area;
-}
-
 public Hit trace_ray(float3 ray_origin, float3 ray_direction)
 {
     RayDesc primary_ray;
@@ -93,69 +81,6 @@ public bool trace_shadow_ray(
     return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
 }
 
-public HitAttributes get_hit_attributes(Hit hit, float3 ray_origin, float3 ray_direction)
-{
-    HitAttributes attributes = (HitAttributes)0;
-
-    GeometryInfo geo = instance_to_pool[hit.instance_id];
-    uint base = geo.index_offset + hit.primitive_index * 3;
-    uint i0 = geo.vertex_offset + indices[base + 0];
-    uint i1 = geo.vertex_offset + indices[base + 1];
-    uint i2 = geo.vertex_offset + indices[base + 2];
-    float3 n0 = normals[i0];
-    float3 n1 = normals[i1];
-    float3 n2 = normals[i2];
-
-    attributes.normal = normalize(
-        n0 * (1.0 - hit.barycentrics.x - hit.barycentrics.y)
-        + n1 * hit.barycentrics.x 
-        + n2 * hit.barycentrics.y);
-
-    float3x3 to_world = (float3x3)hit.object_to_world;
-    float3x3 cofactors = float3x3(cross(to_world[1], to_world[2]), cross(to_world[2], to_world[0]), cross(to_world[0], to_world[1]));
-    attributes.normal = normalize(mul(cofactors, attributes.normal));
-
-    float3 p0 = positions[i0];
-    float3 p1 = positions[i1];
-    float3 p2 = positions[i2];
-    float4 normal_and_area = triangle_normal_and_area(mul(to_world, p1 - p0), mul(to_world, p2 - p0));
-    attributes.geometric_normal = normal_and_area.xyz;
-    if (determinant(to_world) < 0.0)
-        attributes.geometric_normal = -attributes.geometric_normal;
-
-    // flip normals if they are pointing the wrong way
-    if (dot(attributes.geometric_normal, ray_direction) > 0.0)
-        attributes.geometric_normal = -attributes.geometric_normal;
-    if (dot(attributes.normal, attributes.geometric_normal) < 0.0)
-        attributes.normal = -attributes.normal;
-    float3 t0 = tangents[i0];
-    float3 t1 = tangents[i1];
-    float3 t2 = tangents[i2];
-    attributes.tangent = mul(to_world,
-        t0 * (1.0 - hit.barycentrics.x - hit.barycentrics.y)
-        + t1 * hit.barycentrics.x
-        + t2 * hit.barycentrics.y);
-    attributes.tangent = normalize(attributes.tangent - attributes.normal * dot(attributes.normal, attributes.tangent));
-
-    float2 uv0 = uvs[i0];
-    float2 uv1 = uvs[i1];
-    float2 uv2 = uvs[i2];
-    attributes.uv =
-        uv0 * (1.0 - hit.barycentrics.x - hit.barycentrics.y)
-        + uv1 * hit.barycentrics.x
-        + uv2 * hit.barycentrics.y;
-
-    attributes.position = hit.distance * ray_direction + ray_origin;
-
-    attributes.material_index = geo.material_index;
-
-    // needed for MIS
-    attributes.triangle_count = geo.index_count / 3;
-    attributes.triangle_area = normal_and_area.w;
-
-    return attributes;
-}
-
 // RayTracing Gems, A Fast and Robust Method for Avoiding Self-Intersection
 public float3 apply_normal_bias(float3 position, float3 normal)
 {
@@ -192,4 +117,54 @@ public float3 ensure_valid_specular_normal(float3 geometric_normal, float3 view,
     float n_z2 = 0.25 * (ix < 0.0 ? b + discriminant : b - discriminant) / a;
 
     return sqrt(max(1.0 - n_z2, 0.0)) * x + sqrt(max(n_z2, 0.0)) * geometric_normal;
+}
+
+public float4 triangle_normal_and_area(float3 v1v0, float3 v2v0)
+{
+    float3 cross_product = cross(v1v0, v2v0);
+    float cross_length = length(cross_product);
+    return float4(cross_product * rcp(cross_length), 0.5 * cross_length);
+}
+
+public float4 triangle_normal_and_area(float3 v0, float3 v1, float3 v2)
+{
+    return triangle_normal_and_area(v1 - v0, v2 - v0);
+}
+
+public void ortho_basis_from_vector(float3 n, out float3 b1, out float3 b2)
+{
+    float sign = n.z >= 0.0f ? 1.0f : -1.0f;
+    const float a = -1.0f / (sign + n.z);
+    const float b = n.x * n.y * a;
+    b1 = float3(1.0f + sign * n.x * n.x * a, sign * b, -sign * n.x);
+    b2 = float3(b, sign + n.y * n.y * a, -n.y);
+}
+
+public float3x3 ortho_basis_from_vector(float3 n)
+{
+    float3 t, b;
+    ortho_basis_from_vector(n, t, b);
+    return transpose(float3x3(t, b, n));
+}
+
+public float3 cosine_hemisphere(float2 u, float3 normal)
+{
+    float a = sqrt(u.x);
+    float b = 2.0f * PI * u.y;
+    float3 localDir = float3(a * cos(b), a * sin(b), sqrt(1.0f - u.x));
+    float3x3 basis = ortho_basis_from_vector(normal);
+    return mul(basis, localDir);
+}
+
+// A Low-Distortion Map Between Triangle and Square, Heitz, 2019
+// https://eheitzresearch.wordpress.com/749-2/
+public void square_to_triangle(inout float x, inout float y)
+{
+    if (y > x) {
+        x *= 0.5;
+        y -= x;
+    } else {
+        y *= 0.5;
+        x -= y;
+    }
 }

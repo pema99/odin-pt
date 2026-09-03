@@ -1,7 +1,7 @@
 import geometry;
-import material;
+import scene;
 import common;
-import sampling;
+import geometry;
 import spectrum;
 import bsdf;
 
@@ -56,17 +56,12 @@ public LightSample sample_emissive_triangle(
     if (triangle_area <= 0)
         return light_sample;
 
-    const float2 uv0 = uvs[i0];
-    const float2 uv1 = uvs[i1];
-    const float2 uv2 = uvs[i2];
-
     // Pick a point on it
     float2 sq_point = point_rng;
     square_to_triangle(sq_point.x, sq_point.y);
-    const float2 uv = (1.0 - sq_point.x - sq_point.y) * uv0 + sq_point.x * uv1 + sq_point.y * uv2;
 
     // Read emissive value
-    const float3 emission = get_material_emission(geo.material_index, uv);
+    const float3 emission = get_material_emission_fast(geo.material_index, i0, i1, i2, float3(1.0 - sq_point.x - sq_point.y, sq_point.x, sq_point.y));
     if (all(emission == 0.0))
         return light_sample;
 
@@ -117,6 +112,17 @@ public float emissive_triangle_density(
     const float density = light_pick_density * point_pick_density * area_to_solid_angle_jacobian;
 
     return density;
+}
+
+float balance_heuristic(float density0, float density1)
+{
+    return 1.0 / (1.0 + density1 / density0);
+}
+
+float power_heuristic(float density0, float density1)
+{
+    float ratio = density1 / density0;
+    return 1.0 / (1.0 + ratio * ratio);
 }
 
 public float calculate_mis_weight(NEEMode mode, float density0, float density1)

@@ -1,7 +1,6 @@
-import sampling;
 import geometry;
 import bsdf;
-import material;
+import scene;
 import common;
 import rng;
 import spectrum;
@@ -59,31 +58,32 @@ void trace<let MODE : SpectralMode>(uint3 id)
         Hit hit = trace_ray(ray_origin, ray_direction);
         if (hit.is_valid())
         {
-            HitAttributes attributes = get_hit_attributes(hit, ray_origin, ray_direction);
-            MaterialInfo mat = get_material(attributes);
+            HitInfo hit_info;
+            MaterialInfo material;
+            get_hit_info(hit, ray_origin, ray_direction, hit_info, material);
             bool incoming_outside = hit.is_front_face;
             
             float3 view_direction = -ray_direction;
-            float3 specular_normal = ensure_valid_specular_normal(attributes.geometric_normal, view_direction, attributes.normal);
-            BSDF bsdf = get_material_bsdf<MODE>(mat, spectrum_basis, incoming_outside, attributes.normal, specular_normal);
+            float3 specular_normal = ensure_valid_specular_normal(hit_info.geometric_normal, view_direction, hit_info.normal);
+            BSDF bsdf = get_material_bsdf<MODE>(material, spectrum_basis, incoming_outside, hit_info.normal, specular_normal);
 
             // Lambert-beer
             throughput *= exp(-medium_absorption * hit.distance);
 
             // Add randomly hit emissive contribution
-            if (any(mat.emission > 0.0) &&
+            if (any(material.emission > 0.0) &&
                 nee_mode != NEEMode.LightSampling)
             {
                 float mis_weight = 1.0;
                 if (depth > 0 && !previous_bounce_delta)
                 {
-                    float cos_theta_light = abs(dot(attributes.geometric_normal, ray_direction));
-                    float light_density = emissive_triangle_density(attributes.triangle_count, attributes.triangle_area, hit.distance, cos_theta_light);
+                    float cos_theta_light = abs(dot(hit_info.geometric_normal, ray_direction));
+                    float light_density = emissive_triangle_density(hit_info.triangle_count, hit_info.triangle_area, hit.distance, cos_theta_light);
                     mis_weight = calculate_mis_weight(nee_mode, previous_bsdf_density, light_density);
                 }
                 float4 integrand = throughput 
                     * mis_weight 
-                    * upsample_ergb<MODE>(mat.emission, spectrum_basis);
+                    * upsample_ergb<MODE>(material.emission, spectrum_basis);
                 color += resolve_spectrum<MODE>(integrand, density_to_hero_ratio, spectrum_basis);
             }
 
@@ -94,7 +94,7 @@ void trace<let MODE : SpectralMode>(uint3 id)
             {
                 float2 pick_rng = kronecker_2d(id.xy, frame, RNG_DIMS_NEE_PICK + depth * RNG_DIMS_PER_BOUNCE);
                 float2 point_rng = kronecker_2d(id.xy, frame, RNG_DIMS_NEE_POINT + depth * RNG_DIMS_PER_BOUNCE);
-                LightSample nee_sample = sample_emissive_triangle(attributes.position, pick_rng, point_rng);
+                LightSample nee_sample = sample_emissive_triangle(hit_info.position, pick_rng, point_rng);
                 if (nee_sample.is_valid())
                 {
                     float4 nee_bsdf_density, nee_bsdf_value_times_cosine;
@@ -104,10 +104,10 @@ void trace<let MODE : SpectralMode>(uint3 id)
                         nee_bsdf_value_times_cosine,
                         nee_bsdf_density);
 
-                    float3 shadow_ray_bias_normal = dot(attributes.geometric_normal, nee_sample.direction_to_light) > 0.0
-                        ? attributes.geometric_normal
-                        : -attributes.geometric_normal;
-                    float3 shadow_ray_target = apply_normal_bias(attributes.position, shadow_ray_bias_normal);
+                    float3 shadow_ray_bias_normal = dot(hit_info.geometric_normal, nee_sample.direction_to_light) > 0.0
+                        ? hit_info.geometric_normal
+                        : -hit_info.geometric_normal;
+                    float3 shadow_ray_target = apply_normal_bias(hit_info.position, shadow_ray_bias_normal);
                     float3 shadow_ray_vector = shadow_ray_target - nee_sample.shadow_ray_origin;
                     float shadow_ray_length = length(shadow_ray_vector);
                     if (any(nee_bsdf_value_times_cosine > 0.0) &&
@@ -135,7 +135,7 @@ void trace<let MODE : SpectralMode>(uint3 id)
             bool bsdf_is_delta;
             bsdf.sample(
                 view_direction,
-                attributes.geometric_normal,
+                hit_info.geometric_normal,
                 kronecker_2d(id.xy, frame, scatter_dim),
                 sample_direction,
                 bsdf_value_times_cosine,
@@ -162,20 +162,20 @@ void trace<let MODE : SpectralMode>(uint3 id)
             }
 
             // Update medium
-            bool outgoing_transmitted = dot(sample_direction, attributes.geometric_normal) < 0.0;
+            bool outgoing_transmitted = dot(sample_direction, hit_info.geometric_normal) < 0.0;
             if (outgoing_transmitted)
             {
                 if (incoming_outside) // air -> inside volume
-                    medium_absorption = get_material_absorption<MODE>(mat, spectrum_basis);
+                    medium_absorption = get_material_absorption<MODE>(material, spectrum_basis);
                 else // inside volume -> air
                     medium_absorption = 0.0;
             }
             
             // Update ray for next bounce
             float3 bias_normal = outgoing_transmitted 
-                ? -attributes.geometric_normal
-                : attributes.geometric_normal;
-            ray_origin = apply_normal_bias(attributes.position, bias_normal);
+                ? -hit_info.geometric_normal
+                : hit_info.geometric_normal;
+            ray_origin = apply_normal_bias(hit_info.position, bias_normal);
             ray_direction = sample_direction;
         }
         else

@@ -1,5 +1,5 @@
 import common;
-import sampling;
+import geometry;
 import spectrum;
 
 public interface BSDF
