@@ -14,18 +14,13 @@ import imgui "lib:imgui"
 import "gpu"
 
 // TODO:
-// - Region for copytexture/copybuffer commands
 // - Samplers, mipmaps
 // - Async readback?
 // - Denoising
 // - More shading models
 // - NaNs
-// - Get rid of "bend towards view dir" normal hack
-// - Normal maps
 // - Skybox
-// - NEE + MIS
 // - Many lights
-// - Russian roulette
 
 // Constants
 WIDTH : u32 : 1280
