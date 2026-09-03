@@ -42,7 +42,7 @@ public float4 upsample_ergb<let MODE : SpectralMode>(float3 rgb, SpectrumBasis b
     return ergb_to_spectrum(rgb, basis);
 }
 
-// TODO: Can we avoid calling this so much
+// Resolves a per-lane contribution (RGB or spectral) and density to a single contribution in RGB.
 public float3 resolve_spectrum<let MODE : SpectralMode>(
     float4 contribution_over_hero_density,
     float4 density_over_hero_density,
