@@ -112,7 +112,7 @@ app_init :: proc() -> App_State {
 
     state := App_State{
         max_bounces = 20,
-        spectral_mode = .RGB,
+        spectral_mode = .Spectral,
         nee_mode = .MIS,
         tonemapper = .None,
         fov = 60.0,
@@ -341,7 +341,7 @@ app_do_gui :: proc(state: ^App_State) -> bool {
     if imgui.ComboChar("Tonemapper", &tonemapper, raw_data(tonemapper_names[:]), i32(len(tonemapper_names))) {
         state.tonemapper = Tonemapper(tonemapper)
     }
-    if imgui.SliderFloat("Exposure", &state.exposure, -5.0, 5.0, "%.2f") {
+    if imgui.SliderFloat("Exposure", &state.exposure, -2.0, 2.0, "%.2f") {
         state.exposure = math.round(state.exposure / 0.05) * 0.05
     }
     
