@@ -119,28 +119,10 @@ public float emissive_triangle_density(
     return density;
 }
 
-public float mis_weight_light(NEEMode mode, float light_density, float bsdf_density)
+public float calculate_mis_weight(NEEMode mode, float density0, float density1)
 {
-    [forcecase] switch (mode)
-    {
-        case NEEMode.MIS:
-            return power_heuristic(light_density, bsdf_density);
-        case NEEMode.LightSampling:
-            return 1;
-        default:
-            return 0;
-    }
-}
-
-public float mis_weight_bsdf(NEEMode mode, float bsdf_density, float light_density)
-{
-    [forcecase] switch (mode)
-    {
-        case NEEMode.MIS:
-            return power_heuristic(bsdf_density, light_density);
-        case NEEMode.LightSampling:
-            return 0;
-        default:
-            return 1;
-    }
+    if (mode == NEEMode.MIS)
+        return power_heuristic(density0, density1);
+    else
+        return 1;
 }

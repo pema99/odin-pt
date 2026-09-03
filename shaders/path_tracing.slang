@@ -71,14 +71,15 @@ void trace<let MODE : SpectralMode>(uint3 id)
             throughput *= exp(-medium_absorption * hit.distance);
 
             // Add randomly hit emissive contribution
-            if (any(mat.emission > 0.0))
+            if (any(mat.emission > 0.0) &&
+                nee_mode != NEEMode.LightSampling)
             {
                 float mis_weight = 1.0;
                 if (depth > 0 && !previous_bounce_delta)
                 {
                     float cos_theta_light = abs(dot(attributes.geometric_normal, ray_direction));
                     float light_density = emissive_triangle_density(attributes.triangle_count, attributes.triangle_area, hit.distance, cos_theta_light);
-                    mis_weight = mis_weight_bsdf(nee_mode, previous_bsdf_density, light_density);
+                    mis_weight = calculate_mis_weight(nee_mode, previous_bsdf_density, light_density);
                 }
                 float4 integrand = throughput 
                     * mis_weight 
@@ -87,7 +88,9 @@ void trace<let MODE : SpectralMode>(uint3 id)
             }
 
             // Next event estimation
-            if (depth < max_bounces - 1 && bsdf.has_continuous_lobe())
+            if (depth < max_bounces - 1 &&
+                bsdf.has_continuous_lobe() &&
+                nee_mode != NEEMode.BSDFSampling)
             {
                 float2 pick_rng = kronecker_2d(id.xy, frame, RNG_DIMS_NEE_PICK + depth * RNG_DIMS_PER_BOUNCE);
                 float2 point_rng = kronecker_2d(id.xy, frame, RNG_DIMS_NEE_POINT + depth * RNG_DIMS_PER_BOUNCE);
@@ -112,7 +115,7 @@ void trace<let MODE : SpectralMode>(uint3 id)
                     {
                         float4 upsampled_emission = upsample_ergb<MODE>(nee_sample.emission, spectrum_basis);
 
-                        float mis_weight = mis_weight_light(nee_mode, nee_sample.density, nee_bsdf_density[0]);
+                        float mis_weight = calculate_mis_weight(nee_mode, nee_sample.density, nee_bsdf_density[0]);
                         float4 integrand = throughput 
                             * mis_weight 
                             * nee_bsdf_value_times_cosine 
