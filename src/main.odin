@@ -105,7 +105,7 @@ app_init :: proc() -> App_State {
         fov = 60.0,
         scene_index = 0,
         scene_names = [dynamic]cstring{},
-        shader_path = "shaders/megakernel.slang",
+        shader_path = "shaders/path_tracing.slang",
         cam = Camera{pos = {3, 2.5, 3}, yaw = -0.55, pitch = -0.35},
     }
 
@@ -136,7 +136,7 @@ app_init :: proc() -> App_State {
     state.last_shader_write, _ = os.last_write_time_by_name(state.shader_path)
     trace, trace_ok := gpu.compile_shader(state.shader_path)
     if !trace_ok {
-        panic("failed to compile shaders/megakernel.slang")
+        panic("failed to compile shaders/path_tracing.slang")
     }
     state.trace = trace
     state.output = gpu.create_texture(WIDTH, HEIGHT, .R32G32B32A32_SFLOAT, writable = true)
@@ -284,6 +284,7 @@ app_do_gui :: proc(state: ^App_State) -> bool {
     // Stats
     frame_time := gpu.get_profile_time("frame")
     imgui.Text(fmt.ctprintf("%.2fms frametime", frame_time))
+    imgui.Text(fmt.ctprintf("%d samples", state.sample_count))
 
     imgui.End()
 

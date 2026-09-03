@@ -40,10 +40,11 @@ public void square_to_triangle(inout float x, inout float y)
 
 public float balance_heuristic(float density0, float density1)
 {
-    return density0 / (density0 + density1);
+    return 1.0 / (1.0 + density1 / density0);
 }
 
 public float power_heuristic(float density0, float density1)
 {
-    return density0 * density0 / (density0 * density0 + density1 * density1);
+    float ratio = density1 / density0;
+    return 1.0 / (1.0 + ratio * ratio);
 }

@@ -50,6 +50,12 @@ public LightSample sample_emissive_triangle(
     const float3 p0 = mul(transform, float4(positions[i0], 1.0));
     const float3 p1 = mul(transform, float4(positions[i1], 1.0));
     const float3 p2 = mul(transform, float4(positions[i2], 1.0));
+
+    const float4 normal_and_area = triangle_normal_and_area(p0, p1, p2);
+    const float triangle_area = normal_and_area.w;
+    if (triangle_area <= 0)
+        return light_sample;
+
     const float2 uv0 = uvs[i0];
     const float2 uv1 = uvs[i1];
     const float2 uv2 = uvs[i2];
@@ -66,12 +72,10 @@ public LightSample sample_emissive_triangle(
 
     const float3 light_point = (1.0 - sq_point.x - sq_point.y) * p0 + sq_point.x * p1 + sq_point.y * p2;
 
-    // Calculate some geometry..
+    // Get light direction
     const float3 light_to_shading = shading_point - light_point;
     const float distance_to_light = length(light_to_shading);
     const float3 light_direction = light_to_shading * rcp(distance_to_light);
-    const float4 normal_and_area = triangle_normal_and_area(p0, p1, p2);
-    const float triangle_area = normal_and_area.w;
 
     // Facing check
     float3 geometric_normal = normal_and_area.xyz;
