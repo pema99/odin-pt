@@ -43,6 +43,12 @@ Spectral_Mode :: enum u32 {
     Spectral = 1,
 }
 
+NEE_Mode :: enum u32 {
+    MIS,
+    LightSampling,
+    BSDFSampling,
+}
+
 // Helpers
 spectral_mode_kernel :: proc(mode: Spectral_Mode) -> string {
     return mode == .RGB ? "main_rgb" : "main_spectral"
@@ -54,6 +60,7 @@ App_State :: struct {
     max_bounces: i32,
     fov: f32,
     spectral_mode: Spectral_Mode,
+    nee_mode: NEE_Mode,
 
     // GPU state
     cmd: ^gpu.Cmd,
@@ -94,6 +101,7 @@ app_init :: proc() -> App_State {
     state := App_State{
         max_bounces = 20,
         spectral_mode = .RGB,
+        nee_mode = .MIS,
         fov = 60.0,
         scene_index = 0,
         scene_names = [dynamic]cstring{},
@@ -222,14 +230,18 @@ app_do_frame :: proc(state: ^App_State) {
         gpu.set_uniform(cmd, trace, kernel, "sample_count", state.sample_count)
         gpu.set_uniform(cmd, trace, kernel, "max_bounces", state.max_bounces)
         gpu.set_uniform(cmd, trace, kernel, "fov", state.fov)
+        gpu.set_uniform(cmd, trace, kernel, "nee_mode", state.nee_mode);
         
         gpu.set_tlas(cmd, trace, kernel, "scene", scene.tlas)
         gpu.set_buffer(cmd, trace, kernel, "instance_to_pool", scene.geometry_pool.instance_to_pool.buffer)
+        gpu.set_buffer(cmd, trace, kernel, "transforms", scene.geometry_pool.transforms.buffer)
         gpu.set_buffer(cmd, trace, kernel, "positions", scene.geometry_pool.vertices.buffer)
         gpu.set_buffer(cmd, trace, kernel, "normals", scene.geometry_pool.normals.buffer)
         gpu.set_buffer(cmd, trace, kernel, "tangents", scene.geometry_pool.tangents.buffer)
         gpu.set_buffer(cmd, trace, kernel, "uvs", scene.geometry_pool.uvs.buffer)
         gpu.set_buffer(cmd, trace, kernel, "indices", scene.geometry_pool.indices.buffer)
+        gpu.set_buffer(cmd, trace, kernel, "emissive_instance_indices", scene.geometry_pool.emissive_instance_indices.buffer)
+        gpu.set_uniform(cmd, trace, kernel, "emissive_instance_count", scene.geometry_pool.emissive_instance_indices.length)
         gpu.set_buffer(cmd, trace, kernel, "materials", scene.material_pool.materials.buffer)
         gpu.set_texture_array(cmd, trace, kernel, "textures", scene.material_pool.textures)
         gpu.set_texture(cmd, trace, kernel, "image", state.output)
@@ -254,6 +266,13 @@ app_do_gui :: proc(state: ^App_State) -> bool {
     spectral := state.spectral_mode == .Spectral
     if imgui.Checkbox("Spectral", &spectral) {
         state.spectral_mode = spectral ? .Spectral : .RGB
+        changed = true
+    }
+
+    nee_mode_names := [?]cstring{"MIS", "Light Sampling", "BSDF Sampling"}
+    nee_mode := i32(state.nee_mode)
+    if imgui.ComboChar("NEE Mode", &nee_mode, raw_data(nee_mode_names[:]), i32(len(nee_mode_names))) {
+        state.nee_mode = NEE_Mode(nee_mode)
         changed = true
     }
     

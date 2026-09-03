@@ -1,5 +1,3 @@
-module sampling;
-
 import common;
 
 public void ortho_basis_from_vector(float3 n, out float3 b1, out float3 b2)
@@ -25,4 +23,27 @@ public float3 cosine_hemisphere(float2 u, float3 normal)
     float3 localDir = float3(a * cos(b), a * sin(b), sqrt(1.0f - u.x));
     float3x3 basis = ortho_basis_from_vector(normal);
     return mul(basis, localDir);
+}
+
+// A Low-Distortion Map Between Triangle and Square, Heitz, 2019
+// https://eheitzresearch.wordpress.com/749-2/
+public void square_to_triangle(inout float x, inout float y)
+{
+    if (y > x) {
+        x *= 0.5;
+        y -= x;
+    } else {
+        y *= 0.5;
+        x -= y;
+    }
+}
+
+public float balance_heuristic(float density0, float density1)
+{
+    return density0 / (density0 + density1);
+}
+
+public float power_heuristic(float density0, float density1)
+{
+    return density0 * density0 / (density0 * density0 + density1 * density1);
 }

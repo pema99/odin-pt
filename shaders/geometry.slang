@@ -1,19 +1,22 @@
-module raytracing;
-
 import common;
 
 public struct GeometryInfo
 {
-    uint index_offset;
-    uint vertex_offset;
-    uint material_index;
+    public uint index_offset;
+    public uint index_count;
+    public uint vertex_offset;
+    public uint material_index;
 };
-StructuredBuffer<GeometryInfo> instance_to_pool;
-StructuredBuffer<float3> positions;
-StructuredBuffer<float3> normals;
-StructuredBuffer<float3> tangents;
-StructuredBuffer<float2> uvs;
-StructuredBuffer<uint> indices;
+
+public StructuredBuffer<GeometryInfo> instance_to_pool;
+public StructuredBuffer<float3x4> transforms;
+public StructuredBuffer<float3> positions;
+public StructuredBuffer<float3> normals;
+public StructuredBuffer<float3> tangents;
+public StructuredBuffer<float2> uvs;
+public StructuredBuffer<uint> indices;
+public StructuredBuffer<uint> emissive_instance_indices;
+public uniform uint emissive_instance_count;
 
 RaytracingAccelerationStructure scene;
 
@@ -41,6 +44,8 @@ public struct HitAttributes
     public float3 tangent;
     public float2 uv;
     public uint material_index;
+    public uint triangle_count;
+    public float triangle_area;
 }
 
 public Hit trace_ray(float3 ray_origin, float3 ray_direction)
@@ -71,7 +76,11 @@ public Hit trace_ray(float3 ray_origin, float3 ray_direction)
     return hit;
 }
 
-public bool trace_ray_occlusion(float3 ray_origin, float3 ray_direction, float max_distance)
+// Returns true if there is occlusion
+public bool trace_shadow_ray(
+    float3 ray_origin,
+    float3 ray_direction,
+    float max_distance)
 {
     RayDesc occlusion_ray;
     occlusion_ray.Origin = ray_origin;
@@ -92,9 +101,12 @@ public HitAttributes get_hit_attributes(Hit hit, float3 ray_origin, float3 ray_d
 
     GeometryInfo geo = instance_to_pool[hit.instance_id];
     uint base = geo.index_offset + hit.primitive_index * 3;
-    float3 n0 = normals[geo.vertex_offset + indices[base + 0]];
-    float3 n1 = normals[geo.vertex_offset + indices[base + 1]];
-    float3 n2 = normals[geo.vertex_offset + indices[base + 2]];
+    uint i0 = geo.vertex_offset + indices[base + 0];
+    uint i1 = geo.vertex_offset + indices[base + 1];
+    uint i2 = geo.vertex_offset + indices[base + 2];
+    float3 n0 = normals[i0];
+    float3 n1 = normals[i1];
+    float3 n2 = normals[i2];
 
     attributes.normal = normalize(
         n0 * (1.0 - hit.barycentrics.x - hit.barycentrics.y)
@@ -104,10 +116,11 @@ public HitAttributes get_hit_attributes(Hit hit, float3 ray_origin, float3 ray_d
     float3x3 to_world = (float3x3)hit.object_to_world;
     attributes.normal = normalize(mul(transpose((float3x3)hit.world_to_object), attributes.normal));
 
-    float3 p0 = positions[geo.vertex_offset + indices[base + 0]];
-    float3 p1 = positions[geo.vertex_offset + indices[base + 1]];
-    float3 p2 = positions[geo.vertex_offset + indices[base + 2]];
-    attributes.geometric_normal = normalize(cross(mul(to_world, p1 - p0), mul(to_world, p2 - p0)));
+    float3 p0 = positions[i0];
+    float3 p1 = positions[i1];
+    float3 p2 = positions[i2];
+    float4 normal_and_area = triangle_normal_and_area(mul(to_world, p1 - p0), mul(to_world, p2 - p0));
+    attributes.geometric_normal = normal_and_area.xyz;
     if (determinant(to_world) < 0.0)
         attributes.geometric_normal = -attributes.geometric_normal;
 
@@ -116,18 +129,18 @@ public HitAttributes get_hit_attributes(Hit hit, float3 ray_origin, float3 ray_d
         attributes.geometric_normal = -attributes.geometric_normal;
     if (dot(attributes.normal, attributes.geometric_normal) < 0.0)
         attributes.normal = -attributes.normal;
-    float3 t0 = tangents[geo.vertex_offset + indices[base + 0]];
-    float3 t1 = tangents[geo.vertex_offset + indices[base + 1]];
-    float3 t2 = tangents[geo.vertex_offset + indices[base + 2]];
+    float3 t0 = tangents[i0];
+    float3 t1 = tangents[i1];
+    float3 t2 = tangents[i2];
     attributes.tangent = mul(to_world,
         t0 * (1.0 - hit.barycentrics.x - hit.barycentrics.y)
         + t1 * hit.barycentrics.x
         + t2 * hit.barycentrics.y);
     attributes.tangent = normalize(attributes.tangent - attributes.normal * dot(attributes.normal, attributes.tangent));
 
-    float2 uv0 = uvs[geo.vertex_offset + indices[base + 0]];
-    float2 uv1 = uvs[geo.vertex_offset + indices[base + 1]];
-    float2 uv2 = uvs[geo.vertex_offset + indices[base + 2]];
+    float2 uv0 = uvs[i0];
+    float2 uv1 = uvs[i1];
+    float2 uv2 = uvs[i2];
     attributes.uv =
         uv0 * (1.0 - hit.barycentrics.x - hit.barycentrics.y)
         + uv1 * hit.barycentrics.x
@@ -136,6 +149,10 @@ public HitAttributes get_hit_attributes(Hit hit, float3 ray_origin, float3 ray_d
     attributes.position = hit.distance * ray_direction + ray_origin;
 
     attributes.material_index = geo.material_index;
+
+    // needed for MIS
+    attributes.triangle_count = geo.index_count / 3;
+    attributes.triangle_area = normal_and_area.w;
 
     return attributes;
 }

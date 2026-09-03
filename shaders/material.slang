@@ -1,7 +1,5 @@
-module material;
-
 import bsdf;
-import raytracing;
+import geometry;
 import common;
 import spectrum;
 
@@ -58,6 +56,16 @@ public MaterialInfo get_material(inout HitAttributes attributes)
             + attributes.normal * normal_tex.z);
     }
     return mat;
+}
+
+public float3 get_material_emission(uint material_index, float2 uv)
+{
+    MaterialInfo mat = materials[material_index];
+    if (mat.emission_texture_index != MAX_UINT) {
+        float3 emission_tex = textures[mat.emission_texture_index].SampleLevel(texture_sampler, uv, 0).rgb;
+        return emission_tex;
+    }
+    return mat.emission;
 }
 
 public float4 get_material_absorption<let MODE : SpectralMode>(MaterialInfo mat, SpectrumBasis spectrum_basis)

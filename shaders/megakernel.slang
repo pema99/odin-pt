@@ -1,16 +1,18 @@
 import sampling;
-import raytracing;
+import geometry;
 import bsdf;
 import material;
 import common;
 import rng;
 import spectrum;
+import light_sampling;
 
 uniform uint2 screen_size;
 uniform uint frame;
 uniform uint sample_count;
 uniform uint max_bounces;
 uniform float fov;
+uniform NEEMode nee_mode;
 cbuffer Camera
 {
     float3 cam_pos;
@@ -34,9 +36,11 @@ void trace<let MODE : SpectralMode>(uint3 id)
     float3 up = cross(right, forward);
     float fov_scale = tan(fov * 0.5 * PI / 180.0);
 
+    // Path state
     float3 ray_origin = cam_pos;
     float3 ray_direction = normalize(forward + (uv.x * aspect * right + uv.y * up) * fov_scale);
     float4 throughput = 1;
+    float previous_bsdf_density = 0.0;
     float4 density_to_hero_ratio = 1;
     float4 medium_absorption = 0.0;
 
@@ -65,13 +69,48 @@ void trace<let MODE : SpectralMode>(uint3 id)
             // Lambert-beer
             throughput *= exp(-medium_absorption * hit.distance);
 
-            // Add emission
+            // Add randomly hit emissive contribution
             if (any(mat.emission > 0.0))
             {
-                color += resolve_spectrum<MODE>(
-                    throughput * upsample_ergb<MODE>(mat.emission, spectrum_basis),
-                    density_to_hero_ratio,
-                    spectrum_basis);
+                float mis_weight = 1.0;
+                if (depth > 0)
+                {
+                    float cos_theta_light = abs(dot(attributes.geometric_normal, ray_direction));
+                    float light_density = emissive_triangle_density(attributes.triangle_count, attributes.triangle_area, hit.distance, cos_theta_light);
+                    mis_weight = mis_weight_bsdf(nee_mode, previous_bsdf_density, light_density);
+                }
+                float4 integrand = throughput 
+                    * mis_weight 
+                    * upsample_ergb<MODE>(mat.emission, spectrum_basis);
+                color += resolve_spectrum<MODE>(integrand, density_to_hero_ratio, spectrum_basis);
+            }
+
+            // Next event estimation
+            if (depth < max_bounces - 1)
+            {
+                float2 pick_rng = kronecker_2d(id.xy, frame, RNG_DIMS_NEE_PICK + depth * RNG_DIMS_PER_BOUNCE);
+                float2 point_rng = kronecker_2d(id.xy, frame, RNG_DIMS_NEE_POINT + depth * RNG_DIMS_PER_BOUNCE);
+                LightSample nee_sample = sample_emissive_triangle(attributes.position, attributes.geometric_normal, pick_rng, point_rng);
+                if (nee_sample.is_valid()) // TODO: Only diffuse bounce
+                {
+                    float4 nee_bsdf_density, nee_bsdf_value_times_cosine;
+                    bsdf.evaluate(
+                        view_direction,
+                        nee_sample.direction_to_light,
+                        nee_bsdf_value_times_cosine,
+                        nee_bsdf_density);
+
+                    float4 upsampled_emission = upsample_ergb<MODE>(nee_sample.emission, spectrum_basis);
+
+                    float mis_weight = mis_weight_light(nee_mode, nee_sample.density, nee_bsdf_density[0]);
+                    float4 integrand = throughput 
+                        * mis_weight 
+                        * nee_bsdf_value_times_cosine 
+                        * upsampled_emission 
+                        * rcp(nee_sample.density);
+
+                    color += resolve_spectrum<MODE>(integrand, density_to_hero_ratio, spectrum_basis);
+                }
             }
 
             // Evaluate BSDF
@@ -88,6 +127,8 @@ void trace<let MODE : SpectralMode>(uint3 id)
                 bsdf_density);
             if (bsdf_density[0] <= 0.0)
                 break;
+
+            previous_bsdf_density = bsdf_density[0];
 
             // Accumulate integrand
             throughput *= bsdf_value_times_cosine / bsdf_density[0];

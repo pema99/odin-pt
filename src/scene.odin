@@ -13,6 +13,7 @@ import "gpu"
 
 Geometry_Info :: struct {
     index_offset: u32,
+    index_count: u32,
     vertex_offset: u32,
     material_index: u32,
 }
@@ -20,33 +21,39 @@ Geometry_Info :: struct {
 Geometry_Pool :: struct {
     mesh_to_pool: [dynamic]Geometry_Info, // mesh index -> pool index
     instance_to_pool: GPU_List(Geometry_Info), // instanceID -> geometry
+    transforms: GPU_List(matrix[3, 4]f32),
     indices: GPU_List(u32),
     vertices: GPU_List([3]f32),
     normals: GPU_List([3]f32),
     tangents: GPU_List([3]f32),
     uvs: GPU_List([2]f32),
+    emissive_instance_indices: GPU_List(u32), // indices into instance_to_pool
 }
 
 gp_new :: proc() -> Geometry_Pool {
     return Geometry_Pool {
         mesh_to_pool = make([dynamic]Geometry_Info),
         instance_to_pool = gpu_list_new(Geometry_Info),
+        transforms = gpu_list_new(matrix[3, 4]f32),
         indices = gpu_list_new(u32),
         vertices = gpu_list_new([3]f32),
         normals = gpu_list_new([3]f32),
         tangents = gpu_list_new([3]f32),
         uvs = gpu_list_new([2]f32),
+        emissive_instance_indices = gpu_list_new(u32)
     }
 }
 
 gp_delete :: proc(pool: ^Geometry_Pool) {
     delete(pool.mesh_to_pool)
     gpu_list_delete(&pool.instance_to_pool)
+    gpu_list_delete(&pool.transforms)
     gpu_list_delete(&pool.indices)
     gpu_list_delete(&pool.vertices)
     gpu_list_delete(&pool.normals)
     gpu_list_delete(&pool.tangents)
     gpu_list_delete(&pool.uvs)
+    gpu_list_delete(&pool.emissive_instance_indices)
 }
 
 gp_add_mesh :: proc(
@@ -60,6 +67,7 @@ gp_add_mesh :: proc(
 
     info := Geometry_Info {
         index_offset = pool.indices.length,
+        index_count = u32(len(indices)),
         vertex_offset = pool.vertices.length,
         material_index = material_index
     }
@@ -80,9 +88,13 @@ gp_remove_mesh :: proc() {
     // TODO
 }
 
-gp_add_instance :: proc(pool: ^Geometry_Pool, mesh_index: u32) -> u32 {
+gp_add_instance :: proc(pool: ^Geometry_Pool, mesh_index: u32, transform: matrix[3, 4]f32, emissive: bool) -> u32 {
     instance_info := pool.mesh_to_pool[mesh_index]
     gpu_list_add(&pool.instance_to_pool, instance_info)
+    gpu_list_add(&pool.transforms, transform)
+    if emissive {
+        gpu_list_add(&pool.emissive_instance_indices, pool.instance_to_pool.length - 1)
+    }
     return pool.instance_to_pool.length - 1
 }
 
@@ -92,11 +104,13 @@ gp_remove_instance :: proc() {
 
 gp_commit :: proc(pool: ^Geometry_Pool, cmd: ^gpu.Cmd) {
     gpu_list_commit(&pool.instance_to_pool, cmd)
+    gpu_list_commit(&pool.transforms, cmd)
     gpu_list_commit(&pool.indices, cmd)
     gpu_list_commit(&pool.vertices, cmd)
     gpu_list_commit(&pool.normals, cmd)
     gpu_list_commit(&pool.tangents, cmd)
     gpu_list_commit(&pool.uvs, cmd)
+    gpu_list_commit(&pool.emissive_instance_indices, cmd)
 }
 
 Material_BSDF :: enum u32 {
@@ -186,14 +200,20 @@ scene_load_node :: proc(scene: ^Scene, node: ^ai.Node, transform: ai.Matrix4x4) 
 
     for mesh_index: u32 = 0; mesh_index < node.mNumMeshes; mesh_index += 1 {
         blas_index := node.mMeshes[mesh_index]
+        transform: matrix[3, 4]f32 = {
+            new_transform.a1, new_transform.a2, new_transform.a3, new_transform.a4,
+            new_transform.b1, new_transform.b2, new_transform.b3, new_transform.b4,
+            new_transform.c1, new_transform.c2, new_transform.c3, new_transform.c4,
+        }
+
+        material_index := scene.geometry_pool.mesh_to_pool[blas_index].material_index
+        material := scene.material_pool.materials.array[material_index]
+        emissive := material.emission != {0, 0, 0}
+        
         instance := gpu.Instance {
             blas = scene.blases[blas_index],
-            transform = {
-                new_transform.a1, new_transform.a2, new_transform.a3, new_transform.a4,
-                new_transform.b1, new_transform.b2, new_transform.b3, new_transform.b4,
-                new_transform.c1, new_transform.c2, new_transform.c3, new_transform.c4,
-            },
-            id = gp_add_instance(&scene.geometry_pool, blas_index),
+            transform = transform,
+            id = gp_add_instance(&scene.geometry_pool, blas_index, transform, emissive),
         }
         append(&scene.instances, instance)
     }
@@ -373,7 +393,7 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
         if ai.GetMaterialFloat(material, ai.MATKEY_TRANSMISSION_FACTOR, 0, 0, &transmission) == .SUCCESS && transmission > 0 {
             bsdf_type = Material_BSDF.Glass
         }
-        
+
         material_name: ai.String
         ai.GetMaterialString(material, ai.MATKEY_NAME, 0, 0, &material_name)
         if extra, has_extra := extra_data[string(cstring(rawptr(&material_name.data[0])))]; has_extra {

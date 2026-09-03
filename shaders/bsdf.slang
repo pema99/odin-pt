@@ -1,5 +1,3 @@
-module bsdf;
-
 import common;
 import sampling;
 import spectrum;
