@@ -91,7 +91,7 @@ void trace<let MODE : SpectralMode>(uint3 id)
             {
                 float2 pick_rng = kronecker_2d(id.xy, frame, RNG_DIMS_NEE_PICK + depth * RNG_DIMS_PER_BOUNCE);
                 float2 point_rng = kronecker_2d(id.xy, frame, RNG_DIMS_NEE_POINT + depth * RNG_DIMS_PER_BOUNCE);
-                LightSample nee_sample = sample_emissive_triangle(attributes.position, attributes.geometric_normal, pick_rng, point_rng);
+                LightSample nee_sample = sample_emissive_triangle(attributes.position, pick_rng, point_rng);
                 if (nee_sample.is_valid()) // TODO: Only diffuse bounce
                 {
                     float4 nee_bsdf_density, nee_bsdf_value_times_cosine;
@@ -101,16 +101,26 @@ void trace<let MODE : SpectralMode>(uint3 id)
                         nee_bsdf_value_times_cosine,
                         nee_bsdf_density);
 
-                    float4 upsampled_emission = upsample_ergb<MODE>(nee_sample.emission, spectrum_basis);
+                    float3 shadow_ray_bias_normal = dot(attributes.geometric_normal, nee_sample.direction_to_light) > 0.0
+                        ? attributes.geometric_normal
+                        : -attributes.geometric_normal;
+                    float3 shadow_ray_target = apply_normal_bias(attributes.position, shadow_ray_bias_normal);
+                    float3 shadow_ray_vector = shadow_ray_target - nee_sample.shadow_ray_origin;
+                    float shadow_ray_length = length(shadow_ray_vector);
+                    if (any(nee_bsdf_value_times_cosine > 0.0) &&
+                        !trace_shadow_ray(nee_sample.shadow_ray_origin, shadow_ray_vector * rcp(shadow_ray_length), shadow_ray_length))
+                    {
+                        float4 upsampled_emission = upsample_ergb<MODE>(nee_sample.emission, spectrum_basis);
 
-                    float mis_weight = mis_weight_light(nee_mode, nee_sample.density, nee_bsdf_density[0]);
-                    float4 integrand = throughput 
-                        * mis_weight 
-                        * nee_bsdf_value_times_cosine 
-                        * upsampled_emission 
-                        * rcp(nee_sample.density);
+                        float mis_weight = mis_weight_light(nee_mode, nee_sample.density, nee_bsdf_density[0]);
+                        float4 integrand = throughput 
+                            * mis_weight 
+                            * nee_bsdf_value_times_cosine 
+                            * upsampled_emission 
+                            * rcp(nee_sample.density);
 
-                    color += resolve_spectrum<MODE>(integrand, density_to_hero_ratio, spectrum_basis);
+                        color += resolve_spectrum<MODE>(integrand, density_to_hero_ratio, spectrum_basis);
+                    }
                 }
             }
 

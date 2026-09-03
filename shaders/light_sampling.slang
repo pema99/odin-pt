@@ -17,6 +17,7 @@ public struct LightSample
     public float3 emission;
     public float density; // in solid angle measure
     public float3 direction_to_light;
+    public float3 shadow_ray_origin;
 
     public bool is_valid()
     {
@@ -26,7 +27,6 @@ public struct LightSample
 
 public LightSample sample_emissive_triangle(
     float3 shading_point,
-    float3 shading_geometric_normal,
     float2 pick_rng,
     float2 point_rng)
 {
@@ -86,20 +86,13 @@ public LightSample sample_emissive_triangle(
         cos_theta_light = -cos_theta_light;
     }
 
-    // Shadow ray
-    const float3 shadow_ray_origin = apply_normal_bias(light_point, geometric_normal);
-    const float3 shadow_ray_target = apply_normal_bias(shading_point, shading_geometric_normal);
-    const float3 shadow_ray_vector = shadow_ray_target - shadow_ray_origin;
-    const float shadow_ray_length = length(shadow_ray_vector);
-    if (trace_shadow_ray(shadow_ray_origin, shadow_ray_vector * rcp(shadow_ray_length), shadow_ray_length))
-        return light_sample;
-
     float density = emissive_triangle_density(triangle_count, triangle_area, distance_to_light, cos_theta_light);
 
     // Fill out result
     light_sample.emission = emission;
     light_sample.density = density;
     light_sample.direction_to_light = -light_direction;
+    light_sample.shadow_ray_origin = apply_normal_bias(light_point, geometric_normal);
 
     return light_sample;
 }
