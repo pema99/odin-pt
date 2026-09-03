@@ -168,6 +168,15 @@ app_load_scene :: proc(state: ^App_State, index: i32) {
     }
     state.scene = scene
     state.sample_count = 0
+
+    if camera, has_camera := gltf_read_camera(strings.unsafe_string_to_cstring(scene_path)); has_camera {
+        state.cam = Camera {
+            pos = camera.position,
+            yaw = math.atan2(camera.forward.x, -camera.forward.z),
+            pitch = math.asin(camera.forward.y),
+        }
+        state.fov = camera.yfov * 180.0 / math.PI
+    }
 }
 
 app_tick :: proc(state: ^App_State) {

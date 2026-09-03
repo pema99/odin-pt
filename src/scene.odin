@@ -4,6 +4,7 @@ import "core:slice"
 import "core:strings"
 import vk "vendor:vulkan"
 import "core:path/filepath"
+import "core:math/linalg"
 import cgltf "vendor:cgltf"
 import ai "lib:assimp"
 import stbi "vendor:stb/image"
@@ -297,6 +298,35 @@ gltf_read_extra_data :: proc(path: cstring, allocator := context.allocator) -> (
             extra.attenuation_distance = material.volume.attenuation_distance
         }
         result[strings.clone(string(material.name), allocator)] = extra
+    }
+    return
+}
+
+Gltf_Camera :: struct {
+    position: [3]f32,
+    forward: [3]f32,
+    yfov: f32,
+}
+
+gltf_read_camera :: proc(path: cstring) -> (result: Gltf_Camera, ok: bool) {
+    options: cgltf.options
+    data, parse_result := cgltf.parse_file(options, path)
+    if parse_result != .success {
+        return
+    }
+    defer cgltf.free(data)
+
+    for i in 0..<len(data.nodes) {
+        node := &data.nodes[i]
+        if node.camera == nil || node.camera.type != .perspective {
+            continue
+        }
+        world: [16]f32
+        cgltf.node_transform_world(node, raw_data(world[:]))
+        result.position = {world[12], world[13], world[14]}
+        result.forward = linalg.normalize([3]f32{-world[8], -world[9], -world[10]})
+        result.yfov = node.camera.data.perspective.yfov
+        return result, true
     }
     return
 }
