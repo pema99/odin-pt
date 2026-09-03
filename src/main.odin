@@ -21,6 +21,9 @@ import "gpu"
 // - NaNs
 // - Skybox
 // - Many lights
+// - Sheen
+// - Clearcoat
+// - Anisotropic GGX
 
 // Constants
 WIDTH : u32 : 1280
