@@ -41,6 +41,7 @@ void trace<let MODE : SpectralMode>(uint3 id)
     float3 ray_direction = normalize(forward + (uv.x * aspect * right + uv.y * up) * fov_scale);
     float4 throughput = 1;
     float previous_bsdf_density = 0.0;
+    bool previous_bounce_delta = false;
     float4 density_to_hero_ratio = 1;
     float4 medium_absorption = 0.0;
 
@@ -73,7 +74,7 @@ void trace<let MODE : SpectralMode>(uint3 id)
             if (any(mat.emission > 0.0))
             {
                 float mis_weight = 1.0;
-                if (depth > 0)
+                if (depth > 0 && !previous_bounce_delta)
                 {
                     float cos_theta_light = abs(dot(attributes.geometric_normal, ray_direction));
                     float light_density = emissive_triangle_density(attributes.triangle_count, attributes.triangle_area, hit.distance, cos_theta_light);
@@ -86,7 +87,7 @@ void trace<let MODE : SpectralMode>(uint3 id)
             }
 
             // Next event estimation
-            if (depth < max_bounces - 1)
+            if (depth < max_bounces - 1 && bsdf.has_continuous_lobe())
             {
                 float2 pick_rng = kronecker_2d(id.xy, frame, RNG_DIMS_NEE_PICK + depth * RNG_DIMS_PER_BOUNCE);
                 float2 point_rng = kronecker_2d(id.xy, frame, RNG_DIMS_NEE_POINT + depth * RNG_DIMS_PER_BOUNCE);
@@ -118,17 +119,20 @@ void trace<let MODE : SpectralMode>(uint3 id)
             float3 sample_direction;
             float4 bsdf_value_times_cosine;
             float4 bsdf_density;
+            bool bsdf_is_delta;
             bsdf.sample(
                 view_direction,
                 attributes.geometric_normal,
                 kronecker_2d(id.xy, frame, scatter_dim),
                 sample_direction,
                 bsdf_value_times_cosine,
-                bsdf_density);
+                bsdf_density,
+                bsdf_is_delta);
             if (bsdf_density[0] <= 0.0)
                 break;
 
             previous_bsdf_density = bsdf_density[0];
+            previous_bounce_delta = bsdf_is_delta;
 
             // Accumulate integrand
             throughput *= bsdf_value_times_cosine / bsdf_density[0];

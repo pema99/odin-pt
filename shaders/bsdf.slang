@@ -16,7 +16,10 @@ public interface BSDF
         float2 random_sample,
         out float3 sample_direction,
         out float4 value_times_cosine,
-        out float4 density);
+        out float4 density,
+        out bool is_delta);
+
+    bool has_continuous_lobe();
 }
 
 public enum BSDFType : uint
@@ -42,8 +45,9 @@ public struct LambertianBSDF : BSDF
     }
 
     public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
-        out float3 sample_direction, out float4 value_times_cosine, out float4 density)
+        out float3 sample_direction, out float4 value_times_cosine, out float4 density, out bool is_delta)
     {
+        is_delta = false;
         sample_direction = cosine_hemisphere(random_sample, normal);
         evaluate(view_direction, sample_direction, value_times_cosine, density);
 
@@ -52,6 +56,11 @@ public struct LambertianBSDF : BSDF
             value_times_cosine = 0.0;
             density = 0.0;
         }
+    }
+
+    public bool has_continuous_lobe()
+    {
+        return true;
     }
 }
 
@@ -337,7 +346,10 @@ public struct CookTorranceBSDF<F : Fresnel> : BSDF
         if (n_dot_l <= 0.0 || n_dot_v <= 0.0)
             return;
 
-        float alpha = max(roughness * roughness, 1e-3);
+        float alpha = roughness * roughness;
+        if (alpha < 1e-3)
+            return;
+
         float3 half_vector = normalize(view_direction + sample_direction);
         float n_dot_h = dot(normal, half_vector);
         float v_dot_h = dot(view_direction, half_vector);
@@ -352,21 +364,36 @@ public struct CookTorranceBSDF<F : Fresnel> : BSDF
     }
 
     public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
-        out float3 sample_direction, out float4 value_times_cosine, out float4 density)
+        out float3 sample_direction, out float4 value_times_cosine, out float4 density, out bool is_delta)
     {
-        float alpha = max(roughness * roughness, 1e-3);
-        float3x3 basis = ortho_basis_from_vector(normal);
-        float3 v_local = mul(transpose(basis), view_direction);
-        float3 h_local = sample_ggx_vndf(v_local, alpha, random_sample.x, random_sample.y);
-        float3 l_local = reflect(-v_local, h_local);
-        sample_direction = mul(basis, l_local);
-        evaluate(view_direction, sample_direction, value_times_cosine, density);
+        float alpha = roughness * roughness;
+        is_delta = alpha < 1e-3;
+        if (is_delta)
+        {
+            sample_direction = reflect(-view_direction, normal);
+            value_times_cosine = fresnel.evaluate(dot(normal, view_direction));
+            density = 1.0;
+        }
+        else
+        {
+            float3x3 basis = ortho_basis_from_vector(normal);
+            float3 v_local = mul(transpose(basis), view_direction);
+            float3 h_local = sample_ggx_vndf(v_local, alpha, random_sample.x, random_sample.y);
+            float3 l_local = reflect(-v_local, h_local);
+            sample_direction = mul(basis, l_local);
+            evaluate(view_direction, sample_direction, value_times_cosine, density);
+        }
 
         if (dot(geometric_normal, sample_direction) <= 0.0)
         {
             value_times_cosine = 0.0;
             density = 0.0;
         }
+    }
+
+    public bool has_continuous_lobe()
+    {
+        return roughness * roughness >= 1e-3;
     }
 }
 
@@ -420,23 +447,24 @@ public struct MixtureBSDF<A : BSDF, B : BSDF, W : BSDFMixWeights> : BSDF
     }
 
     public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
-        out float3 sample_direction, out float4 value_times_cosine, out float4 density)
+        out float3 sample_direction, out float4 value_times_cosine, out float4 density, out bool is_delta)
     {
         float probability_a = weighting.probability_a(view_direction);
         float u1 = random_sample.x;
         float4 lobe_value;
         float4 lobe_density;
-        if (u1 < probability_a)
+        bool sampled_a = u1 < probability_a;
+        if (sampled_a)
         {
             u1 = saturate(u1 / probability_a);
             bsdf_a.sample(view_direction, geometric_normal, float2(u1, random_sample.y), sample_direction,
-                lobe_value, lobe_density);
+                lobe_value, lobe_density, is_delta);
         }
         else
         {
             u1 = saturate((u1 - probability_a) / (1.0 - probability_a));
             bsdf_b.sample(view_direction, geometric_normal, float2(u1, random_sample.y),
-                sample_direction, lobe_value, lobe_density);
+                sample_direction, lobe_value, lobe_density, is_delta);
         }
 
         if (lobe_density[0] <= 0.0)
@@ -445,7 +473,21 @@ public struct MixtureBSDF<A : BSDF, B : BSDF, W : BSDFMixWeights> : BSDF
             density = 0.0;
             return;
         }
+
+        if (is_delta)
+        {
+            float4 weight_a, weight_b;
+            weighting.weights(view_direction, sample_direction, weight_a, weight_b);
+            value_times_cosine = (sampled_a ? weight_a : weight_b) * lobe_value;
+            density = (sampled_a ? probability_a : 1.0 - probability_a) * lobe_density;
+            return;
+        }
         evaluate(view_direction, sample_direction, value_times_cosine, density);
+    }
+
+    public bool has_continuous_lobe()
+    {
+        return bsdf_a.has_continuous_lobe() || bsdf_b.has_continuous_lobe();
     }
 }
 
@@ -569,7 +611,10 @@ public struct GlassBSDF<F : Fresnel> : BSDF
             return;
         }
 
-        float alpha = max(roughness * roughness, 1e-3);
+        float alpha = roughness * roughness;
+        if (alpha < 1e-3)
+            return;
+
         float n_dot_v = dot(normal, view_direction);
         float n_dot_l = dot(normal, sample_direction);
         bool is_reflection = n_dot_l > 0.0;
@@ -644,7 +689,7 @@ public struct GlassBSDF<F : Fresnel> : BSDF
     }
 
     public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
-        out float3 sample_direction, out float4 value_times_cosine, out float4 density)
+        out float3 sample_direction, out float4 value_times_cosine, out float4 density, out bool is_delta)
     {
         float4 eta = fresnel.base_ior();
         if (all(eta == 1.0)) {
@@ -652,18 +697,24 @@ public struct GlassBSDF<F : Fresnel> : BSDF
             sample_direction = -view_direction;
             value_times_cosine = color;
             density = 1.0;
+            is_delta = true;
             return;
         }
 
-        float alpha = max(roughness * roughness, 1e-3);
+        float alpha = roughness * roughness;
+        is_delta = alpha < 1e-3;
         float3x3 basis = ortho_basis_from_vector(normal);
         float3 local_view = mul(transpose(basis), view_direction);
-        float3 local_half = sample_ggx_vndf(local_view, alpha, random_sample.x, random_sample.y);
+        float3 local_half = float3(0.0, 0.0, 1.0);
+        if (!is_delta)
+            local_half = sample_ggx_vndf(local_view, alpha, random_sample.x, random_sample.y);
 
         // Choose reflection vs refraction with fresnel
-        float reflection_probability = fresnel.evaluate(dot(local_view, local_half)).x;
+        float4 reflectance = fresnel.evaluate(dot(local_view, local_half));
+        float reflection_probability = reflectance.x;
+        bool is_reflection = frac(random_sample.x * 1024.0) < reflection_probability; // reuse rng
         float3 local_sample;
-        if (frac(random_sample.x * 1024.0) < reflection_probability) // reuse rng
+        if (is_reflection)
         {
             local_sample = reflect(-local_view, local_half);
         }
@@ -673,7 +724,15 @@ public struct GlassBSDF<F : Fresnel> : BSDF
             local_sample = refract(-local_view, local_half, 1.0 / eta[0]);
         }
         sample_direction = mul(basis, local_sample);
-        evaluate(view_direction, sample_direction, value_times_cosine, density);
+        if (is_delta)
+        {
+            value_times_cosine = is_reflection ? reflectance : (1.0 - reflectance) / (eta * eta) * color;
+            density = is_reflection ? reflection_probability : 1.0 - reflection_probability;
+        }
+        else
+        {
+            evaluate(view_direction, sample_direction, value_times_cosine, density);
+        }
         
         float geometric_side = dot(geometric_normal, sample_direction);
         if (dot(normal, sample_direction) > 0.0 ? geometric_side <= 0.0 : geometric_side >= 0.0)
@@ -681,6 +740,11 @@ public struct GlassBSDF<F : Fresnel> : BSDF
             value_times_cosine = 0.0;
             density = 0.0;
         }
+    }
+
+    public bool has_continuous_lobe()
+    {
+        return roughness * roughness >= 1e-3 && !all(fresnel.base_ior() == 1.0);
     }
 }
 
