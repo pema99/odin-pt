@@ -7,7 +7,6 @@ uniform uint2 screen_size;
 // Narkowicz ACES https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
 float3 aces_narkowicz(float3 x)
 {
-    x *= 0.6; // overexposed without this!!
     float a = 2.51;
     float b = 0.03;
     float c = 2.43;
@@ -19,8 +18,6 @@ float3 aces_narkowicz(float3 x)
 // Hill ACES https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl
 float3 aces_hill(float3 x)
 {
-    x *= 1.8;
-
     float3x3 aces_input = float3x3(
         float3(0.59719, 0.35458, 0.04823),
         float3(0.07600, 0.90834, 0.01566),
@@ -124,7 +121,7 @@ void main(uint2 id: SV_DispatchThreadID)
             value.rgb = aces_narkowicz(value.rgb);
             break;
         case Tonemapper.AcesHill:
-            value.rgb = aces_hill(value.rgb);
+            value.rgb = aces_hill(value.rgb * 1.8);
             break;
         case Tonemapper.Neutral:
             value.rgb = neutral_tonemap(value.rgb);
