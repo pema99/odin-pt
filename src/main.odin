@@ -104,7 +104,6 @@ App_State :: struct {
     last_time: f64,
     frame: u32,
     sample_count: u32,
-    pick_object: Pick_Object,
 
     // Select scene, and hot reload
     last_shader_write: time.Time,
@@ -115,6 +114,11 @@ App_State :: struct {
     scene_index: i32,
     scene_names: [dynamic]cstring,
     scene: Scene,
+
+    // Editing
+    pick_object: Pick_Object,
+    pick_material_index: u32,
+    pick_material: Material_Info,
 }
 app: App_State
 
@@ -123,7 +127,7 @@ app_init :: proc() -> App_State {
     context.logger = log.create_console_logger()
 
 	gpu.init(
-        title = "Odin Path Tracer", 
+        title = "Odin Path Tracer",
         width = WIDTH, height = HEIGHT,
         resizable = true,
         use_imgui = true,
@@ -136,12 +140,16 @@ app_init :: proc() -> App_State {
         nee_mode = .MIS,
         tonemapper = .None,
         fov = 60.0,
+
         scene_index = 0,
         scene_names = [dynamic]cstring{},
         shader_path = "shaders/path_tracing.slang",
         postfx_shader_path = "shaders/postfx.slang",
         picking_shader_path = "shaders/scene_picking.slang",
         cam = Camera{pos = {3, 2.5, 3}, yaw = -0.55, pitch = -0.35},
+
+        pick_object = Pick_Object { instance_id = max(u32) },
+        pick_material_index = max(u32),
     }
 
     f, _ := os.open("assets")
@@ -236,6 +244,8 @@ app_load_scene :: proc(state: ^App_State, index: i32) {
     }
     state.scene = scene
     state.sample_count = 0
+    state.pick_object = Pick_Object { instance_id = max(u32) }
+    state.pick_material_index = max(u32)
 
     if camera, has_camera := gltf_read_camera(strings.unsafe_string_to_cstring(scene_path)); has_camera {
         state.cam = Camera {
@@ -294,25 +304,31 @@ app_do_frame :: proc(state: ^App_State) {
     now := glfw.GetTime()
     delta_time := min(f32(now - state.last_time), 0.1)
     state.last_time = now
-    reset := app_update_camera(&state.cam, &state.last_mouse, delta_time)
+    camera_dirty := app_update_camera(&state.cam, &state.last_mouse, delta_time)
 
     cmd := state.cmd
     trace := state.trace
     postfx := state.postfx
+    scene := &state.scene
+    trace_kernel := spectral_mode_kernel(state.spectral_mode)
 
     gpu.start_frame()
 
         // GUI
-        reset |= app_do_gui(state)
-        if reset {
+        sample_dirty, material_dirty := app_do_gui(state)
+        if camera_dirty || sample_dirty || material_dirty {
             state.sample_count = 0
         }
-        app_do_picking(state)
-        
-        scene := state.scene
-        trace_kernel := spectral_mode_kernel(state.spectral_mode)
+
         gpu.reset_cmd(cmd)
         gpu.begin_profile(cmd, "frame")
+
+       	// Picking
+        app_do_picking(state)
+        if material_dirty {
+ 	      	scene.material_pool.materials.array[state.pick_material_index] = state.pick_material
+	        mp_commit(&state.scene.material_pool, cmd)
+        }
 
         // Main RT pass
         gpu.set_cbuffer(cmd, trace, trace_kernel, "Camera", &state.cam)
@@ -322,7 +338,7 @@ app_do_frame :: proc(state: ^App_State) {
         gpu.set_uniform(cmd, trace, trace_kernel, "max_bounces", state.max_bounces)
         gpu.set_uniform(cmd, trace, trace_kernel, "fov", state.fov)
         gpu.set_uniform(cmd, trace, trace_kernel, "nee_mode", state.nee_mode);
-        
+
         gpu.set_tlas(cmd, trace, trace_kernel, "scene", scene.tlas)
         gpu.set_buffer(cmd, trace, trace_kernel, "instance_to_pool", scene.geometry_pool.instance_to_pool.buffer)
         gpu.set_buffer(cmd, trace, trace_kernel, "transforms", scene.geometry_pool.transforms.buffer)
@@ -352,31 +368,31 @@ app_do_frame :: proc(state: ^App_State) {
 
         gpu.end_profile(cmd)
         gpu.execute_cmd(cmd)
-        
+
     gpu.end_frame(display)
 
     state.sample_count += 1
     state.frame += 1
 }
 
-app_do_gui :: proc(state: ^App_State) -> bool {
+app_do_gui :: proc(state: ^App_State) -> (sample_dirty: bool, material_dirty: bool) {
+    // Main UI
     imgui.Begin("Settings")
 
-    // Main UI
-    changed := imgui.SliderInt("Max Bounces", &state.max_bounces, 1, 40)
-    changed |= imgui.SliderFloat("FOV", &state.fov, 10.0, 120.0)
+    sample_dirty = imgui.SliderInt("Max Bounces", &state.max_bounces, 1, 40)
+    sample_dirty |= imgui.SliderFloat("FOV", &state.fov, 10.0, 120.0)
 
     spectral := state.spectral_mode == .Spectral
     if imgui.Checkbox("Spectral", &spectral) {
         state.spectral_mode = spectral ? .Spectral : .RGB
-        changed = true
+        sample_dirty = true
     }
 
     nee_mode_names := [?]cstring{"MIS", "Light Sampling", "BSDF Sampling"}
     nee_mode := i32(state.nee_mode)
     if imgui.ComboChar("NEE Mode", &nee_mode, raw_data(nee_mode_names[:]), i32(len(nee_mode_names))) {
         state.nee_mode = NEE_Mode(nee_mode)
-        changed = true
+        sample_dirty = true
     }
 
     tonemapper_names := [?]cstring{"None","Reinhard","ACES (Narkowicz)","ACES (Hill)","Neutral","Uncharted"}
@@ -387,10 +403,10 @@ app_do_gui :: proc(state: ^App_State) -> bool {
     if imgui.SliderFloat("Exposure", &state.exposure, -2.0, 2.0, "%.2f") {
         state.exposure = math.round(state.exposure / 0.05) * 0.05
     }
-    
+
     if imgui.ComboChar("Scene", &state.scene_index, raw_data(state.scene_names[:]), i32(len(state.scene_names))) {
         app_load_scene(state, state.scene_index)
-        changed = true
+        sample_dirty = true
     }
 
     // Stats
@@ -400,7 +416,18 @@ app_do_gui :: proc(state: ^App_State) -> bool {
 
     imgui.End()
 
-    return changed
+    // Material window
+    material_dirty = false
+    if state.pick_object.instance_id != max(u32) {
+    	imgui.Begin("Material")
+
+        material_dirty |= imgui.ColorEdit3("Albedo", &state.pick_material.albedo)
+        // TODO: more stuff
+
+        imgui.End()
+    }
+
+    return sample_dirty, material_dirty
 }
 
 app_do_picking :: proc(state: ^App_State) {
@@ -428,13 +455,19 @@ app_do_picking :: proc(state: ^App_State) {
         gpu.set_tlas(cmd, state.picking, "main", "scene", state.scene.tlas)
         gpu.set_buffer(cmd, state.picking, "main", "pick_object", state.picking_buffer)
         gpu.dispatch(cmd, state.picking, "main", 1)
-    
+
     gpu.execute_cmd(cmd)
 
     picked := gpu.readback_buffer(state.picking_buffer, Pick_Object)
     defer delete(picked)
 
     state.pick_object = picked[0]
+    instance_id := state.pick_object.instance_id
+    if instance_id != max(u32) {
+    	material_index := state.scene.geometry_pool.instance_to_pool.array[instance_id].material_index
+     	state.pick_material_index = material_index
+    	state.pick_material = state.scene.material_pool.materials.array[material_index]
+    }
 }
 
 app_update_camera :: proc(c: ^Camera, last_mouse: ^[2]f64, delta_time: f32) -> bool {
@@ -451,7 +484,7 @@ app_update_camera :: proc(c: ^Camera, last_mouse: ^[2]f64, delta_time: f32) -> b
 	if io.WantCaptureKeyboard {
         return reset
     }
-    
+
 	forward := [3]f32{math.cos(c.pitch) * math.sin(c.yaw), math.sin(c.pitch), -math.cos(c.pitch) * math.cos(c.yaw)}
 	right := linalg.normalize(linalg.cross(forward, [3]f32{0, 1, 0}))
 	move: [3]f32
