@@ -24,6 +24,7 @@ import "gpu"
 // - Sheen
 // - Clearcoat
 // - Anisotropic GGX
+// - COmplex IOR for metal
 
 // Constants
 WIDTH : u32 : 1280
