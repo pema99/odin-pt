@@ -419,10 +419,33 @@ app_do_gui :: proc(state: ^App_State) -> (sample_dirty: bool, material_dirty: bo
     // Material window
     material_dirty = false
     if state.pick_object.instance_id != max(u32) {
-    	imgui.Begin("Material")
+        imgui.Begin("Material")
 
+        bsdf_names := [?]cstring{"Disney", "Glass", "Lambert"}
+        bsdf_type := i32(state.pick_material.bsdf_type)
+        if imgui.ComboChar("BSDF", &bsdf_type, raw_data(bsdf_names[:]), i32(len(bsdf_names))) {
+            state.pick_material.bsdf_type = Material_BSDF(bsdf_type)
+            material_dirty = true
+        }
+
+        imgui.SeparatorText("Surface")
         material_dirty |= imgui.ColorEdit3("Albedo", &state.pick_material.albedo)
-        // TODO: more stuff
+        material_dirty |= imgui.SliderFloat("Metallic", &state.pick_material.metallic, 0.0, 1.0)
+        material_dirty |= imgui.SliderFloat("Roughness", &state.pick_material.roughness, 0.0, 1.0)
+        material_dirty |= imgui.SliderFloat("IOR", &state.pick_material.index_of_refraction, 1.0, 3.0)
+
+        imgui.SeparatorText("Emission")
+        material_dirty |= imgui.ColorEdit3("Emission", &state.pick_material.emission, {.HDR, .Float})
+
+        imgui.SeparatorText("Volume")
+        material_dirty |= imgui.SliderFloat("Dispersion", &state.pick_material.dispersion, 0.0, 1.0)
+        material_dirty |= imgui.ColorEdit3("Attenuation", &state.pick_material.attenuation_color)
+        material_dirty |= imgui.DragFloat("Attenuation Distance", &state.pick_material.attenuation_distance, 0.01, 0.0, 100.0)
+
+        imgui.SeparatorText("Iridescence")
+        material_dirty |= imgui.SliderFloat("Film Factor", &state.pick_material.iridescence_factor, 0.0, 1.0)
+        material_dirty |= imgui.SliderFloat("Film IOR", &state.pick_material.iridescence_ior, 1.0, 3.0)
+        material_dirty |= imgui.SliderFloat("Film Thickness", &state.pick_material.iridescence_thickness, 0.0, 2000.0, "%.0f nm")
 
         imgui.End()
     }
