@@ -168,3 +168,20 @@ public void square_to_triangle(inout float x, inout float y)
         x -= y;
     }
 }
+
+public float3 primary_ray_direction(
+    float2 pixel,
+    uint2 screen_size,
+    float cam_pitch,
+    float cam_yaw,
+    float cam_fov)
+{
+    float2 uv = (pixel / float2(screen_size)) * 2.0 - 1.0;
+    uv.y = -uv.y;
+    float aspect = float(screen_size.x) / float(screen_size.y);
+    float3 forward = float3(cos(cam_pitch) * sin(cam_yaw), sin(cam_pitch), -cos(cam_pitch) * cos(cam_yaw));
+    float3 right = normalize(cross(forward, float3(0, 1, 0)));
+    float3 up = cross(right, forward);
+    float fov_scale = tan(cam_fov * 0.5 * PI / 180.0);
+    return normalize(forward + (uv.x * aspect * right + uv.y * up) * fov_scale);
+}

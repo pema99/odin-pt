@@ -12,7 +12,7 @@ uniform uint sample_count;
 uniform uint max_bounces;
 uniform float fov;
 uniform NEEMode nee_mode;
-cbuffer Camera
+cbuffer Camera // TODO: Don't need cbuffer for this...
 {
     float3 cam_pos;
     float cam_yaw;
@@ -26,18 +26,10 @@ void trace<let MODE : SpectralMode>(uint3 id)
     if (any(id.xy >= screen_size))
         return;
 
+    // Init primary ray
     float2 jitter = kronecker_2d(id.xy, frame, RNG_DIM_JITTER);
-    float2 uv = ((id.xy + jitter) / float2(screen_size)) * 2.0 - 1.0;
-    uv.y = -uv.y;
-    float aspect = float(screen_size.x) / float(screen_size.y);
-    float3 forward = float3(cos(cam_pitch) * sin(cam_yaw), sin(cam_pitch), -cos(cam_pitch) * cos(cam_yaw));
-    float3 right = normalize(cross(forward, float3(0, 1, 0)));
-    float3 up = cross(right, forward);
-    float fov_scale = tan(fov * 0.5 * PI / 180.0);
-
-    // Path state
     float3 ray_origin = cam_pos;
-    float3 ray_direction = normalize(forward + (uv.x * aspect * right + uv.y * up) * fov_scale);
+    float3 ray_direction = primary_ray_direction(id.xy + jitter, screen_size, cam_pitch, cam_yaw, fov);
     float4 throughput = 1;
     float previous_bsdf_density = 0.0;
     bool previous_bounce_delta = false;

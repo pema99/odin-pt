@@ -424,6 +424,36 @@ destroy_buffer :: proc(b: Buffer) {
 	free_buffer(b)
 }
 
+// Copies the whole buffer back to the CPU, blocking until the GPU has finished writing it.
+// The result has b.size / size_of(T) elements and is owned by the caller.
+readback_buffer :: proc(b: Buffer, $T: typeid, allocator := context.allocator) -> []T {
+	staging := create_buffer_ex(int(b.size), {.TRANSFER_DST}, host_visible = true)
+	defer free_buffer(staging)
+
+	sub := acquire_submission()
+	cb := sub.cb
+	vk_check(vk.ResetCommandBuffer(cb, {}))
+	vk_check(vk.BeginCommandBuffer(cb, &vk.CommandBufferBeginInfo{sType = .COMMAND_BUFFER_BEGIN_INFO, flags = {.ONE_TIME_SUBMIT}}))
+	full_barrier(cb)
+	region := vk.BufferCopy{size = vk.DeviceSize(b.size)}
+	vk.CmdCopyBuffer(cb, b.handle, staging.handle, 1, &region)
+	vk_check(vk.EndCommandBuffer(cb))
+
+	cb_info := vk.CommandBufferSubmitInfo{sType = .COMMAND_BUFFER_SUBMIT_INFO, commandBuffer = cb}
+	vk_check(vk.QueueSubmit2(queue, 1, &vk.SubmitInfo2 {
+		sType                  = .SUBMIT_INFO_2,
+		commandBufferInfoCount = 1,
+		pCommandBufferInfos    = &cb_info,
+	}, sub.fence))
+	vk_check(vk.WaitForFences(device, 1, &sub.fence, true, max(u64)))
+	vk_check(vk.ResetFences(device, 1, &sub.fence))
+	append(&free_submissions, sub)
+
+	result := make([]T, b.size / size_of(T), allocator)
+	mem.copy(raw_data(result), staging.mapped, int(b.size))
+	return result
+}
+
 // Creates a 2D texture with one mip level.
 create_texture :: proc(width, height: u32, format: vk.Format, writable := false) -> Texture {
 	t := Texture{width = width, height = height, format = format, writable = writable}

@@ -36,6 +36,10 @@ Camera :: struct {
 	pitch: f32,
 }
 
+Pick_Object :: struct {
+    instance_id: u32,
+}
+
 Spectral_Mode :: enum u32 {
     RGB = 0,
     Spectral = 1,
@@ -61,6 +65,18 @@ spectral_mode_kernel :: proc(mode: Spectral_Mode) -> string {
     return mode == .RGB ? "main_rgb" : "main_spectral"
 }
 
+shaders_last_write :: proc() -> (newest: time.Time) {
+    f, _ := os.open("shaders")
+    defer os.close(f)
+    fis, _ := os.read_dir(f, -1, context.temp_allocator)
+    for fi in fis {
+        if strings.ends_with(fi.name, ".slang") && time.diff(newest, fi.modification_time) > 0 {
+            newest = fi.modification_time
+        }
+    }
+    return
+}
+
 // State
 App_State :: struct {
     // Settings
@@ -75,8 +91,10 @@ App_State :: struct {
     cmd: ^gpu.Cmd,
     trace: gpu.Shader,
     postfx: gpu.Shader,
+    picking: gpu.Shader,
     output: gpu.Texture,
     output_postfx: gpu.Texture,
+    picking_buffer: gpu.Buffer,
     kernel_size: [3]u32,
     num_groups: [2]u32,
 
@@ -86,11 +104,13 @@ App_State :: struct {
     last_time: f64,
     frame: u32,
     sample_count: u32,
+    pick_object: Pick_Object,
 
     // Select scene, and hot reload
     last_shader_write: time.Time,
     shader_path: string,
     postfx_shader_path: string,
+    picking_shader_path: string,
     last_scene_write: time.Time,
     scene_index: i32,
     scene_names: [dynamic]cstring,
@@ -120,6 +140,7 @@ app_init :: proc() -> App_State {
         scene_names = [dynamic]cstring{},
         shader_path = "shaders/path_tracing.slang",
         postfx_shader_path = "shaders/postfx.slang",
+        picking_shader_path = "shaders/scene_picking.slang",
         cam = Camera{pos = {3, 2.5, 3}, yaw = -0.55, pitch = -0.35},
     }
 
@@ -153,15 +174,25 @@ app_init :: proc() -> App_State {
         panic("failed to compile shaders/path_tracing.slang")
     }
     state.trace = trace
+
     postfx, postfx_ok := gpu.compile_shader(state.postfx_shader_path)
     if !postfx_ok {
         panic("failed to compile shaders/postfx.slang")
     }
     state.postfx = postfx
+
+    picking, picking_ok := gpu.compile_shader(state.picking_shader_path)
+    if !picking_ok {
+        panic("failed to compile shaders/scene_picking.slang")
+    }
+    state.picking = picking
+
     state.output = gpu.create_texture(WIDTH, HEIGHT, .R32G32B32A32_SFLOAT, writable = true)
     state.output_postfx = gpu.create_texture(WIDTH, HEIGHT, .R32G32B32A32_SFLOAT, writable = true)
     state.kernel_size = gpu.get_kernel_size(state.trace, spectral_mode_kernel(state.spectral_mode))
     state.num_groups = ([2]u32{WIDTH, HEIGHT} + state.kernel_size.xy - 1) / state.kernel_size.xy
+
+    state.picking_buffer = gpu.create_buffer(size_of(Pick_Object), true)
 
     state.last_mouse.x, state.last_mouse.y = glfw.GetCursorPos(gpu.get_window())
     state.last_time = glfw.GetTime()
@@ -169,16 +200,21 @@ app_init :: proc() -> App_State {
     return state
 }
 
-shaders_last_write :: proc() -> (newest: time.Time) {
-    f, _ := os.open("shaders")
-    defer os.close(f)
-    fis, _ := os.read_dir(f, -1, context.temp_allocator)
-    for fi in fis {
-        if strings.ends_with(fi.name, ".slang") && time.diff(newest, fi.modification_time) > 0 {
-            newest = fi.modification_time
-        }
+app_delete :: proc(state: ^App_State) {
+    scene_delete(&state.scene)
+    gpu.destroy_texture(state.output)
+    gpu.destroy_texture(state.output_postfx)
+    gpu.destroy_buffer(state.picking_buffer)
+    gpu.destroy_shader(state.trace)
+    gpu.destroy_shader(state.postfx)
+    gpu.destroy_shader(state.picking)
+    gpu.destroy_cmd(state.cmd)
+    for i := 0; i < len(state.scene_names); i += 1 {
+        delete(state.scene_names[i])
     }
-    return
+    delete(state.scene_names)
+    gpu.cleanup()
+    log.destroy_console_logger(context.logger)
 }
 
 app_load_scene :: proc(state: ^App_State, index: i32) {
@@ -247,6 +283,10 @@ app_tick :: proc(state: ^App_State) {
             gpu.destroy_shader(state.postfx)
             state.postfx = new_postfx
         }
+        if new_picking, ok := gpu.compile_shader(state.picking_shader_path); ok {
+            gpu.destroy_shader(state.picking)
+            state.picking = new_picking
+        }
     }
 }
 
@@ -262,16 +302,19 @@ app_do_frame :: proc(state: ^App_State) {
 
     gpu.start_frame()
 
+        // GUI
         reset |= app_do_gui(state)
         if reset {
             state.sample_count = 0
         }
+        app_do_picking(state)
         
         scene := state.scene
         trace_kernel := spectral_mode_kernel(state.spectral_mode)
         gpu.reset_cmd(cmd)
         gpu.begin_profile(cmd, "frame")
 
+        // Main RT pass
         gpu.set_cbuffer(cmd, trace, trace_kernel, "Camera", &state.cam)
         gpu.set_uniform(cmd, trace, trace_kernel, "screen_size", [2]u32{state.output.width, state.output.height})
         gpu.set_uniform(cmd, trace, trace_kernel, "frame", state.frame)
@@ -360,19 +403,38 @@ app_do_gui :: proc(state: ^App_State) -> bool {
     return changed
 }
 
-app_delete :: proc(state: ^App_State) {
-    scene_delete(&state.scene)
-    gpu.destroy_texture(state.output)
-    gpu.destroy_texture(state.output_postfx)
-    gpu.destroy_shader(state.trace)
-    gpu.destroy_shader(state.postfx)
-    gpu.destroy_cmd(state.cmd)
-    for i := 0; i < len(state.scene_names); i += 1 {
-        delete(state.scene_names[i])
+app_do_picking :: proc(state: ^App_State) {
+    io := imgui.GetIO()
+    window := gpu.get_window()
+    if glfw.GetMouseButton(window, glfw.MOUSE_BUTTON_LEFT) != glfw.PRESS ||
+       io.WantCaptureMouse {
+        return
     }
-    delete(state.scene_names)
-    gpu.cleanup()
-    log.destroy_console_logger(context.logger)
+
+    x, y := glfw.GetCursorPos(window)
+    window_width, window_height := glfw.GetWindowSize(window)
+    mouse_coord := [2]f32{
+        f32((x + 0.5) * f64(state.output.width) / f64(window_width)),
+        f32((y + 0.5) * f64(state.output.height) / f64(window_height)),
+    }
+
+    cmd := gpu.create_cmd()
+    defer gpu.destroy_cmd(cmd)
+
+        gpu.set_cbuffer(cmd, state.picking, "main", "Camera", &state.cam)
+        gpu.set_uniform(cmd, state.picking, "main", "screen_size", [2]u32{state.output.width, state.output.height})
+        gpu.set_uniform(cmd, state.picking, "main", "fov", state.fov)
+        gpu.set_uniform(cmd, state.picking, "main", "mouse_coord", mouse_coord)
+        gpu.set_tlas(cmd, state.picking, "main", "scene", state.scene.tlas)
+        gpu.set_buffer(cmd, state.picking, "main", "pick_object", state.picking_buffer)
+        gpu.dispatch(cmd, state.picking, "main", 1)
+    
+    gpu.execute_cmd(cmd)
+
+    picked := gpu.readback_buffer(state.picking_buffer, Pick_Object)
+    defer delete(picked)
+
+    state.pick_object = picked[0]
 }
 
 app_update_camera :: proc(c: ^Camera, last_mouse: ^[2]f64, delta_time: f32) -> bool {
