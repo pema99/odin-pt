@@ -16,10 +16,8 @@ import "gpu"
 
 // TODO:
 // - Samplers, mipmaps
-// - Async readback?
 // - Denoising
 // - More shading models
-// - NaNs
 // - Skybox
 // - Many lights
 // - Sheen
