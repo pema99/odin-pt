@@ -728,6 +728,11 @@ public struct GlassBSDF<F : Fresnel> : BSDF
         {
             value_times_cosine = is_reflection ? reflectance : (1.0 - reflectance) / (eta * eta) * color;
             density = is_reflection ? reflection_probability : 1.0 - reflection_probability;
+            if (!is_reflection)
+            {
+                value_times_cosine = select(eta == eta[0], value_times_cosine, 0.0);
+                density = select(eta == eta[0], density, 0.0);
+            }
         }
         else
         {
