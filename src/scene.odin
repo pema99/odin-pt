@@ -273,7 +273,7 @@ Gltf_Extra_Data :: struct {
 // https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_dispersion
 // https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_iridescence
 // https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_volume
-gltf_read_extra_data :: proc(path: cstring, allocator := context.allocator) -> (result: map[string]Gltf_Extra_Data) {
+gltf_read_extra_data :: proc(path: cstring, allocator := context.allocator) -> (result: map[string]Gltf_Extra_Data, unnamed: map[u32]Gltf_Extra_Data) {
     options: cgltf.options
     data, parse_result := cgltf.parse_file(options, path)
     if parse_result != .success {
@@ -282,10 +282,8 @@ gltf_read_extra_data :: proc(path: cstring, allocator := context.allocator) -> (
     defer cgltf.free(data)
 
     result = make(map[string]Gltf_Extra_Data, allocator)
-    for material in data.materials {
-        if material.name == nil {
-            continue
-        }
+    unnamed = make(map[u32]Gltf_Extra_Data, allocator)
+    for material, index in data.materials {
         extra: Gltf_Extra_Data
         if material.has_dispersion {
             extra.dispersion = material.dispersion.dispersion
@@ -299,7 +297,11 @@ gltf_read_extra_data :: proc(path: cstring, allocator := context.allocator) -> (
             extra.attenuation_color = material.volume.attenuation_color
             extra.attenuation_distance = material.volume.attenuation_distance
         }
-        result[strings.clone(string(material.name), allocator)] = extra
+        if material.name == nil {
+            unnamed[u32(index)] = extra
+        } else {
+            result[strings.clone(string(material.name), allocator)] = extra
+        }
     }
     return
 }
@@ -385,10 +387,11 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
         gp_add_mesh(&scene.geometry_pool, verts, normals, tangents, uvs, faces, mesh.mMaterialIndex)
     }
 
-    extra_data := gltf_read_extra_data(path)
+    extra_data, unnamed_extra_data := gltf_read_extra_data(path)
     defer {
         for name in extra_data do delete(name)
         delete(extra_data)
+        delete(unnamed_extra_data)
     }
 
     for material_index: u32 = 0; material_index < ai_scene.mNumMaterials; material_index += 1 {
@@ -433,7 +436,11 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
 
         material_name: ai.String
         ai.GetMaterialString(material, ai.MATKEY_NAME, 0, 0, &material_name)
-        if extra, has_extra := extra_data[string(cstring(rawptr(&material_name.data[0])))]; has_extra {
+        extra, has_extra := extra_data[string(cstring(rawptr(&material_name.data[0])))]
+        if !has_extra {
+            extra, has_extra = unnamed_extra_data[material_index]
+        }
+        if has_extra {
             dispersion = extra.dispersion
             iridescence_factor = extra.iridescence_factor
             iridescence_ior = extra.iridescence_ior
