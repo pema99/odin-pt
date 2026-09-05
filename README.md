@@ -11,3 +11,6 @@ it's a path tracer, wew
 <img width="1232" height="640" alt="image" src="https://github.com/user-attachments/assets/7daeeb5d-e935-4a79-b6d7-321f743719a5" />
 <img width="1103" height="654" alt="image" src="https://github.com/user-attachments/assets/cdbf7660-41fe-4512-a87d-73fd7f897336" />
 <img width="780" height="648" alt="image" src="https://github.com/user-attachments/assets/3c17b395-38ff-4029-b392-93ea45e6fc9e" />
+
+<img width="1236" height="688" alt="image" src="https://github.com/user-attachments/assets/8ab16da6-4417-4ed4-b15e-21c388590422" />
+
