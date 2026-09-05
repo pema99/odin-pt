@@ -9,7 +9,7 @@ public enum NEEMode
 {
     MIS,
     LightSampling,
-    BSDFSampling,  
+    BSDFSampling,
 };
 
 public struct LightSample
@@ -58,7 +58,7 @@ public LightSample sample_emissive_triangle(
 
     // Pick a point on it
     float2 sq_point = point_rng;
-    square_to_triangle(sq_point.x, sq_point.y);
+    square_to_triangle(sq_point);
 
     // Read emissive value
     bool double_sided;
@@ -98,7 +98,7 @@ public LightSample sample_emissive_triangle(
 // density of sampling a point on an emissive triangle
 public float emissive_triangle_density(
     uint triangle_count,
-    float triangle_area, 
+    float triangle_area,
     float distance_to_light,
     float cos_theta_light)
 {

@@ -1,12 +1,13 @@
 // Once:
 public static const uint RNG_DIM_JITTER = 0;
 public static const uint RNG_DIM_WAVELENGTH = 1;
+public static const uint RNG_DIM_LENS = 2;
 // Per bounce:
 public static const uint RNG_DIMS_PER_BOUNCE = 4;
-public static const uint RNG_DIMS_NEE_PICK = 2;
-public static const uint RNG_DIMS_NEE_POINT = 3;
-public static const uint RNG_DIM_SCATTER = 4;
-public static const uint RNG_DIM_RUSSIAN_ROULETTE = 5;
+public static const uint RNG_DIMS_NEE_PICK = 3;
+public static const uint RNG_DIMS_NEE_POINT = 4;
+public static const uint RNG_DIM_SCATTER = 5;
+public static const uint RNG_DIM_RUSSIAN_ROULETTE = 6;
 
 // From https://github.com/skeeto/hash-prospector/issues/19
 public uint low_bias_hash(uint value)

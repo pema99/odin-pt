@@ -11,12 +11,15 @@ uniform uint frame;
 uniform uint sample_count;
 uniform uint max_bounces;
 uniform float fov;
+uniform float aperture;
+uniform float focus_distance;
 uniform NEEMode nee_mode;
 cbuffer Camera // TODO: Don't need cbuffer for this...
 {
     float3 cam_pos;
-    float cam_yaw;
-    float cam_pitch;
+    float3 cam_right;
+    float3 cam_up;
+    float3 cam_forward;
 };
 
 RWTexture2D<float4> image;
@@ -28,8 +31,11 @@ void trace<let MODE : SpectralMode>(uint3 id)
 
     // Init primary ray
     float2 jitter = kronecker_2d(id.xy, frame, RNG_DIM_JITTER);
+    float2 lens_rng = kronecker_2d(id.xy, frame, RNG_DIM_LENS);
     float3 ray_origin = cam_pos;
-    float3 ray_direction = primary_ray_direction(id.xy + jitter, screen_size, cam_pitch, cam_yaw, fov);
+    float3 ray_direction = primary_ray_direction(id.xy + jitter, screen_size, cam_right, cam_up, cam_forward, fov);
+    apply_aperture(ray_origin, ray_direction, cam_right, cam_up, cam_forward, aperture, focus_distance, lens_rng);
+
     float4 throughput = 1;
     float previous_bsdf_density = 0.0;
     bool previous_bounce_delta = false;
@@ -54,7 +60,7 @@ void trace<let MODE : SpectralMode>(uint3 id)
             MaterialInfo material;
             get_hit_info(hit, ray_origin, ray_direction, hit_info, material);
             bool incoming_outside = hit.is_front_face;
-            
+
             float3 view_direction = -ray_direction;
             float3 specular_normal = ensure_valid_specular_normal(hit_info.geometric_normal, view_direction, hit_info.normal);
             BSDF bsdf = get_material_bsdf<MODE>(material, spectrum_basis, incoming_outside, hit_info.normal, specular_normal);
@@ -73,8 +79,8 @@ void trace<let MODE : SpectralMode>(uint3 id)
                     float light_density = emissive_triangle_density(hit_info.triangle_count, hit_info.triangle_area, hit.distance, cos_theta_light);
                     mis_weight = calculate_mis_weight(nee_mode, previous_bsdf_density, light_density);
                 }
-                float4 integrand = throughput 
-                    * mis_weight 
+                float4 integrand = throughput
+                    * mis_weight
                     * upsample_ergb<MODE>(material.emission, spectrum_basis);
                 color += resolve_spectrum<MODE>(integrand, density_to_hero_ratio, spectrum_basis);
             }
@@ -108,10 +114,10 @@ void trace<let MODE : SpectralMode>(uint3 id)
                         float4 upsampled_emission = upsample_ergb<MODE>(nee_sample.emission, spectrum_basis);
 
                         float mis_weight = calculate_mis_weight(nee_mode, nee_sample.density, nee_bsdf_density[0]);
-                        float4 integrand = throughput 
-                            * mis_weight 
-                            * nee_bsdf_value_times_cosine 
-                            * upsampled_emission 
+                        float4 integrand = throughput
+                            * mis_weight
+                            * nee_bsdf_value_times_cosine
+                            * upsampled_emission
                             * rcp(nee_sample.density);
 
                         color += resolve_spectrum<MODE>(integrand, density_to_hero_ratio, spectrum_basis);
@@ -162,9 +168,9 @@ void trace<let MODE : SpectralMode>(uint3 id)
                 else // inside volume -> air
                     medium_absorption = 0.0;
             }
-            
+
             // Update ray for next bounce
-            float3 bias_normal = outgoing_transmitted 
+            float3 bias_normal = outgoing_transmitted
                 ? -hit_info.geometric_normal
                 : hit_info.geometric_normal;
             ray_origin = apply_normal_bias(hit_info.position, bias_normal);

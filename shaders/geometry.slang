@@ -158,30 +158,71 @@ public float3 cosine_hemisphere(float2 u, float3 normal)
 
 // A Low-Distortion Map Between Triangle and Square, Heitz, 2019
 // https://eheitzresearch.wordpress.com/749-2/
-public void square_to_triangle(inout float x, inout float y)
+public void square_to_triangle(inout float2 u)
 {
-    if (y > x) {
-        x *= 0.5;
-        y -= x;
+    if (u.y > u.x) {
+        u.x *= 0.5;
+        u.y -= u.x;
     } else {
-        y *= 0.5;
-        x -= y;
+        u.y *= 0.5;
+        u.x -= u.y;
     }
+}
+
+// A Low Distortion Map Between Disk and Square, Shirley and Chiu, 1997.
+// Version adapted by PBRT https://github.com/mmp/pbrt-v4/blob/master/src/pbrt/util/sampling.h#L325
+public float2 square_to_concentric_disk(float2 u)
+{
+    float2 offset = 2.0 * u - 1.0;
+    if (all(offset == 0.0))
+        return 0.0;
+
+    float theta, radius;
+    if (abs(offset.x) > abs(offset.y))
+    {
+        radius = offset.x;
+        theta = PI / 4.0 * (offset.y / offset.x);
+    }
+    else
+    {
+        radius = offset.y;
+        theta = PI / 2.0 - PI / 4.0 * (offset.x / offset.y);
+    }
+    float cos_theta, sin_theta;
+    sincos(theta, sin_theta, cos_theta);
+    return radius * float2(cos_theta, sin_theta);
 }
 
 public float3 primary_ray_direction(
     float2 pixel,
     uint2 screen_size,
-    float cam_pitch,
-    float cam_yaw,
+    float3 cam_right,
+    float3 cam_up,
+    float3 cam_forward,
     float cam_fov)
 {
     float2 uv = (pixel / float2(screen_size)) * 2.0 - 1.0;
     uv.y = -uv.y;
     float aspect = float(screen_size.x) / float(screen_size.y);
-    float3 forward = float3(cos(cam_pitch) * sin(cam_yaw), sin(cam_pitch), -cos(cam_pitch) * cos(cam_yaw));
-    float3 right = normalize(cross(forward, float3(0, 1, 0)));
-    float3 up = cross(right, forward);
     float fov_scale = tan(cam_fov * 0.5 * PI / 180.0);
-    return normalize(forward + (uv.x * aspect * right + uv.y * up) * fov_scale);
+    return normalize(cam_forward + (uv.x * aspect * cam_right + uv.y * cam_up) * fov_scale);
+}
+
+public void apply_aperture(
+    inout float3 ray_origin,
+    inout float3 ray_direction,
+    float3 cam_right,
+    float3 cam_up,
+    float3 cam_forward,
+    float aperture,
+    float focus_distance,
+    float2 rng)
+{
+    if (aperture <= 0)
+        return;
+
+    float3 focal_point = ray_origin + ray_direction * (focus_distance / dot(ray_direction, cam_forward));
+    float2 lens = square_to_concentric_disk(rng) * aperture;
+    ray_origin += cam_right * lens.x + cam_up * lens.y;
+    ray_direction = normalize(focal_point - ray_origin);
 }

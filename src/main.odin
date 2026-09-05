@@ -33,8 +33,9 @@ HEIGHT : u32 : 720
 // Structs and enums
 Camera :: struct {
 	pos: [3]f32,
-	yaw: f32,
-	pitch: f32,
+	right: [3]f32,
+	up: [3]f32,
+	forward: [3]f32,
 }
 
 Pick_Object :: struct {
@@ -62,6 +63,12 @@ Tonemapper :: enum u32 {
 };
 
 // Helpers
+camera_look :: proc(c: ^Camera, forward: [3]f32) {
+	c.forward = linalg.normalize(forward)
+	c.right = linalg.normalize(linalg.cross(c.forward, [3]f32{0, 1, 0}))
+	c.up = linalg.cross(c.right, c.forward)
+}
+
 spectral_mode_kernel :: proc(mode: Spectral_Mode) -> string {
     return mode == .RGB ? "main_rgb" : "main_spectral"
 }
@@ -83,6 +90,8 @@ App_State :: struct {
     // Settings
     max_bounces: i32,
     fov: f32,
+    aperture: f32,
+    focus_distance: f32,
     spectral_mode: Spectral_Mode,
     nee_mode: NEE_Mode,
     tonemapper: Tonemapper,
@@ -141,17 +150,21 @@ app_init :: proc() -> App_State {
         nee_mode = .MIS,
         tonemapper = .None,
         fov = 60.0,
+        aperture = 0.0,
+        focus_distance = 5.0,
 
         scene_index = 0,
         scene_names = [dynamic]cstring{},
         shader_path = "shaders/path_tracing.slang",
         postfx_shader_path = "shaders/postfx.slang",
         picking_shader_path = "shaders/scene_picking.slang",
-        cam = Camera{pos = {3, 2.5, 3}, yaw = -0.55, pitch = -0.35},
+        cam = Camera{pos = {3, 2.5, 3}},
 
         pick_object = Pick_Object { instance_id = max(u32) },
         pick_material_index = max(u32),
     }
+
+    camera_look(&state.cam, {-0.491, -0.343, -0.801})
 
     f, _ := os.open("assets")
     defer os.close(f)
@@ -249,11 +262,8 @@ app_load_scene :: proc(state: ^App_State, index: i32) {
     state.pick_material_index = max(u32)
 
     if camera, has_camera := gltf_read_camera(strings.unsafe_string_to_cstring(scene_path)); has_camera {
-        state.cam = Camera {
-            pos = camera.position,
-            yaw = math.atan2(camera.forward.x, -camera.forward.z),
-            pitch = math.asin(camera.forward.y),
-        }
+        state.cam.pos = camera.position
+        camera_look(&state.cam, camera.forward)
         state.fov = camera.yfov * 180.0 / math.PI
     }
 }
@@ -338,6 +348,8 @@ app_do_frame :: proc(state: ^App_State) {
         gpu.set_uniform(cmd, trace, trace_kernel, "sample_count", state.sample_count)
         gpu.set_uniform(cmd, trace, trace_kernel, "max_bounces", state.max_bounces)
         gpu.set_uniform(cmd, trace, trace_kernel, "fov", state.fov)
+        gpu.set_uniform(cmd, trace, trace_kernel, "aperture", state.aperture)
+        gpu.set_uniform(cmd, trace, trace_kernel, "focus_distance", state.focus_distance)
         gpu.set_uniform(cmd, trace, trace_kernel, "nee_mode", state.nee_mode);
 
         gpu.set_tlas(cmd, trace, trace_kernel, "scene", scene.tlas)
@@ -380,8 +392,13 @@ app_do_gui :: proc(state: ^App_State) -> (sample_dirty: bool, material_dirty: bo
     // Main UI
     imgui.Begin("Settings")
 
-    sample_dirty = imgui.SliderInt("Max Bounces", &state.max_bounces, 1, 40)
-    sample_dirty |= imgui.SliderFloat("FOV", &state.fov, 10.0, 120.0)
+    imgui.SeparatorText("Camera")
+    sample_dirty = imgui.SliderFloat("FOV", &state.fov, 10.0, 120.0)
+    sample_dirty |= imgui.SliderFloat("Aperture", &state.aperture, 0.0, 0.3, "%.4f")
+    sample_dirty |= imgui.SliderFloat("Focus Distance", &state.focus_distance, 0.05, 500.0, "%.3f", {.Logarithmic})
+
+    imgui.SeparatorText("Light transport")
+    sample_dirty |= imgui.SliderInt("Max Bounces", &state.max_bounces, 1, 40)
 
     spectral := state.spectral_mode == .Spectral
     if imgui.Checkbox("Spectral", &spectral) {
@@ -396,6 +413,7 @@ app_do_gui :: proc(state: ^App_State) -> (sample_dirty: bool, material_dirty: bo
         sample_dirty = true
     }
 
+    imgui.SeparatorText("Post processing")
     tonemapper_names := [?]cstring{"None","Reinhard","ACES (Narkowicz)","ACES (Hill)","Neutral","Uncharted"}
     tonemapper := i32(state.tonemapper)
     if imgui.ComboChar("Tonemapper", &tonemapper, raw_data(tonemapper_names[:]), i32(len(tonemapper_names))) {
@@ -405,6 +423,7 @@ app_do_gui :: proc(state: ^App_State) -> (sample_dirty: bool, material_dirty: bo
         state.exposure = math.round(state.exposure / 0.05) * 0.05
     }
 
+    imgui.SeparatorText("General")
     if imgui.ComboChar("Scene", &state.scene_index, raw_data(state.scene_names[:]), i32(len(state.scene_names))) {
         app_load_scene(state, state.scene_index)
         sample_dirty = true
@@ -500,8 +519,9 @@ app_update_camera :: proc(c: ^Camera, last_mouse: ^[2]f64, delta_time: f32) -> b
 	window := gpu.get_window()
 	x, y := glfw.GetCursorPos(window)
 	if !io.WantCaptureMouse && glfw.GetMouseButton(window, glfw.MOUSE_BUTTON_RIGHT) == glfw.PRESS {
-		c.yaw += f32(x - last_mouse.x) * 0.003
-		c.pitch = clamp(c.pitch - f32(y - last_mouse.y) * 0.003, -1.5, 1.5)
+		yaw := math.atan2(c.forward.x, -c.forward.z) + f32(x - last_mouse.x) * 0.003
+		pitch := clamp(math.asin(c.forward.y) - f32(y - last_mouse.y) * 0.003, -1.5, 1.5)
+		camera_look(c, {math.cos(pitch) * math.sin(yaw), math.sin(pitch), -math.cos(pitch) * math.cos(yaw)})
         reset = true
 	}
 	last_mouse^ = {x, y}
@@ -509,13 +529,11 @@ app_update_camera :: proc(c: ^Camera, last_mouse: ^[2]f64, delta_time: f32) -> b
         return reset
     }
 
-	forward := [3]f32{math.cos(c.pitch) * math.sin(c.yaw), math.sin(c.pitch), -math.cos(c.pitch) * math.cos(c.yaw)}
-	right := linalg.normalize(linalg.cross(forward, [3]f32{0, 1, 0}))
 	move: [3]f32
-	if glfw.GetKey(window, glfw.KEY_W) == glfw.PRESS do move += forward
-	if glfw.GetKey(window, glfw.KEY_S) == glfw.PRESS do move -= forward
-	if glfw.GetKey(window, glfw.KEY_D) == glfw.PRESS do move += right
-	if glfw.GetKey(window, glfw.KEY_A) == glfw.PRESS do move -= right
+	if glfw.GetKey(window, glfw.KEY_W) == glfw.PRESS do move += c.forward
+	if glfw.GetKey(window, glfw.KEY_S) == glfw.PRESS do move -= c.forward
+	if glfw.GetKey(window, glfw.KEY_D) == glfw.PRESS do move += c.right
+	if glfw.GetKey(window, glfw.KEY_A) == glfw.PRESS do move -= c.right
 	if glfw.GetKey(window, glfw.KEY_E) == glfw.PRESS do move.y += 1
 	if glfw.GetKey(window, glfw.KEY_Q) == glfw.PRESS do move.y -= 1
 	speed: f32 = glfw.GetKey(window, glfw.KEY_LEFT_SHIFT) == glfw.PRESS ? 12.0 : 2

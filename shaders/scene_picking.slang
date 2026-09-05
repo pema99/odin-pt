@@ -8,8 +8,9 @@ uniform float fov;
 cbuffer Camera
 {
     float3 cam_pos;
-    float cam_yaw;
-    float cam_pitch;
+    float3 cam_right;
+    float3 cam_up;
+    float3 cam_forward;
 };
 
 struct PickObject
@@ -24,7 +25,7 @@ RWStructuredBuffer<PickObject> pick_object;
 void main(uint2 id: SV_DispatchThreadID)
 {
     float3 ray_origin = cam_pos;
-    float3 ray_direction = primary_ray_direction(mouse_coord, screen_size, cam_pitch, cam_yaw, fov);
+    float3 ray_direction = primary_ray_direction(mouse_coord, screen_size, cam_right, cam_up, cam_forward, fov);
 
     Hit hit = trace_ray(ray_origin, ray_direction);
 
