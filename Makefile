@@ -34,7 +34,7 @@ ODIN_SRC    := $(wildcard src/*.odin) $(wildcard src/gpu/*.odin)
 DEBUG_EXE   := bin/debug/$(NAME)$(EXE)
 RELEASE_EXE := bin/release/$(NAME)$(EXE)
 
-.PHONY: debug release run run-release clean
+.PHONY: debug release run run-release bench clean
 
 debug:   $(DEBUG_EXE)
 release: $(RELEASE_EXE)
@@ -44,6 +44,9 @@ run: $(DEBUG_EXE)
 
 run-release: $(RELEASE_EXE)
 	$(RUN)
+
+bench: $(RELEASE_EXE)
+	$(RUN) --bench $(SAMPLES)
 
 $(DEBUG_EXE): $(ODIN_SRC) | bin/debug bin/debug/$(ASSIMP_BIN)
 	$(ODIN) build src -collection:lib=lib -out:$@ -debug -vet $(LINK_FLAGS)

@@ -301,6 +301,11 @@ start_frame :: proc() {
 	}
 }
 
+wait_finish :: proc() {
+	wait_idle()
+	append(&free_submissions, acquire_submission())
+}
+
 // Ends the frame: blits a texture of any size and format onto the window and presents it.
 // Expects linear colour, the swapchain is sRGB.
 end_frame :: proc(t: Texture) {

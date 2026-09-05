@@ -2,6 +2,7 @@ package main
 
 import "core:strings"
 import "core:os"
+import "core:strconv"
 import "core:fmt"
 import "core:log"
 import "core:time"
@@ -340,7 +341,7 @@ app_do_frame :: proc(state: ^App_State) {
         gpu.begin_profile(cmd, "frame")
 
        	// Picking
-        app_do_picking(state)
+            app_do_picking(state)
         if material_dirty {
  	      	scene.material_pool.materials.array[state.pick_material_index] = state.pick_material
 	        mp_commit(&state.scene.material_pool, cmd)
@@ -569,6 +570,17 @@ app_update_camera :: proc(c: ^Camera, last_mouse: ^[2]f64, delta_time: f32) -> b
 main :: proc() {
     app = app_init()
     defer app_delete(&app)
+
+    if len(os.args) >= 2 && os.args[1] == "--bench" {
+        samples := u32(500)
+        if len(os.args) >= 3 {
+            if parsed, ok := strconv.parse_int(os.args[2]); ok {
+                samples = u32(parsed)
+            }
+        }
+        app_bench(&app, samples)
+        return
+    }
 
     for gpu.is_running() {
         app_tick(&app)
