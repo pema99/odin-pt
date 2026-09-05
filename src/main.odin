@@ -40,6 +40,7 @@ Camera :: struct {
 
 Pick_Object :: struct {
     instance_id: u32,
+    depth: f32,
 }
 
 Spectral_Mode :: enum u32 {
@@ -92,6 +93,7 @@ App_State :: struct {
     fov: f32,
     aperture: f32,
     focus_distance: f32,
+    focus_on_click: bool,
     spectral_mode: Spectral_Mode,
     nee_mode: NEE_Mode,
     tonemapper: Tonemapper,
@@ -129,6 +131,8 @@ App_State :: struct {
     pick_object: Pick_Object,
     pick_material_index: u32,
     pick_material: Material_Info,
+    pick_emission_color: [3]f32,
+    pick_emission_strength: f32,
 }
 app: App_State
 
@@ -152,6 +156,7 @@ app_init :: proc() -> App_State {
         fov = 60.0,
         aperture = 0.0,
         focus_distance = 5.0,
+        focus_on_click = false,
 
         scene_index = 0,
         scene_names = [dynamic]cstring{},
@@ -394,8 +399,9 @@ app_do_gui :: proc(state: ^App_State) -> (sample_dirty: bool, material_dirty: bo
 
     imgui.SeparatorText("Camera")
     sample_dirty = imgui.SliderFloat("FOV", &state.fov, 10.0, 120.0)
-    sample_dirty |= imgui.SliderFloat("Aperture", &state.aperture, 0.0, 0.3, "%.4f")
+    sample_dirty |= imgui.SliderFloat("Aperture", &state.aperture, 0.0, 0.4, "%.4f")
     sample_dirty |= imgui.SliderFloat("Focus Distance", &state.focus_distance, 0.05, 500.0, "%.3f", {.Logarithmic})
+    imgui.Checkbox("Set Focus On Click", &state.focus_on_click)
 
     imgui.SeparatorText("Light transport")
     sample_dirty |= imgui.SliderInt("Max Bounces", &state.max_bounces, 1, 40)
@@ -455,10 +461,21 @@ app_do_gui :: proc(state: ^App_State) -> (sample_dirty: bool, material_dirty: bo
         material_dirty |= imgui.SliderFloat("IOR", &state.pick_material.index_of_refraction, 1.0, 3.0)
 
         imgui.SeparatorText("Emission")
-        material_dirty |= imgui.ColorEdit3("Emission", &state.pick_material.emission, {.HDR, .Float})
+        emission := state.pick_material.emission
+        if state.pick_emission_color * state.pick_emission_strength != emission {
+            strength := max(emission.r, emission.g, emission.b)
+            state.pick_emission_strength = strength
+            state.pick_emission_color = strength > 0 ? emission / strength : {1, 1, 1}
+        }
+        emission_dirty := imgui.ColorEdit3("Emission", &state.pick_emission_color)
+        emission_dirty |= imgui.DragFloat("Strength", &state.pick_emission_strength, 0.001 + state.pick_emission_strength * 0.01, 0.0, 100000.0)
+        if emission_dirty {
+            state.pick_material.emission = state.pick_emission_color * state.pick_emission_strength
+            material_dirty = true
+        }
 
         imgui.SeparatorText("Volume")
-        material_dirty |= imgui.SliderFloat("Dispersion", &state.pick_material.dispersion, 0.0, 1.0)
+        material_dirty |= imgui.SliderFloat("Dispersion", &state.pick_material.dispersion, 0.0, 3.0)
         material_dirty |= imgui.ColorEdit3("Attenuation", &state.pick_material.attenuation_color)
         material_dirty |= imgui.DragFloat("Attenuation Distance", &state.pick_material.attenuation_distance, 0.01, 0.0, 100.0)
 
@@ -510,6 +527,11 @@ app_do_picking :: proc(state: ^App_State) {
     	material_index := state.scene.geometry_pool.instance_to_pool.array[instance_id].material_index
      	state.pick_material_index = material_index
     	state.pick_material = state.scene.material_pool.materials.array[material_index]
+
+     	if state.focus_on_click {
+	      	state.focus_distance = clamp(state.pick_object.depth, 0.05, 500.0)
+			state.sample_count = 0
+      	}
     }
 }
 

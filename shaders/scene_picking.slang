@@ -16,6 +16,7 @@ cbuffer Camera
 struct PickObject
 {
     uint instance_id;
+    float depth;
 };
 
 RWStructuredBuffer<PickObject> pick_object;
@@ -35,6 +36,7 @@ void main(uint2 id: SV_DispatchThreadID)
     if (hit.is_valid())
     {
         pick.instance_id = hit.instance_id;
+        pick.depth = hit.distance * dot(ray_direction, cam_forward);
     }
 
     pick_object[0] = pick;
