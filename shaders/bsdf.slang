@@ -73,16 +73,6 @@ float4 fresnel_schlick(float v_dot_h, float4 f0)
 }
 
 // Microfacet Models for Refraction through Rough Surfaces, Walter et al., 2007, (eq. 22)
-float fresnel_dielectric(float c, float eta)
-{
-    float g2 = eta * eta - 1.0 + c * c;
-    float g = sqrt(max(g2, 0.0));
-    float a = (g - c) / (g + c);
-    float b = (c * (g + c) - 1.0) / (c * (g - c) + 1.0);
-    return 0.5 * a * a * (1.0 + b * b);
-}
-
-// Same as above but vectorized
 float4 fresnel_dielectric(float c, float4 eta)
 {
     float4 g2 = eta * eta - 1.0 + c * c;
