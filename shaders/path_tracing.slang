@@ -275,8 +275,8 @@ void trace<let MODE : SpectralMode>()
 
 [shader("compute")]
 [numthreads(512, 1, 1)]
-void main_rgb(uint3 id: SV_DispatchThreadID) { trace<SpectralMode.RGB>(); }
+void main_rgb() { trace<SpectralMode.RGB>(); }
 
 [shader("compute")]
 [numthreads(512, 1, 1)]
-void main_spectral(uint3 id: SV_DispatchThreadID) { trace<SpectralMode.Spectral>(); }
+void main_spectral() { trace<SpectralMode.Spectral>(); }
