@@ -605,7 +605,7 @@ compile_shader :: proc(path: string) -> (s: Shader, ok: bool) #optional_ok {
 	args := [?]cstring {
 		strings.clone_to_cstring(path, virtual.arena_allocator(&scratch)),
 		"-target", "spirv",
-		"-profile", "spirv_1_6+spvRayQueryKHR",
+		"-profile", "spirv_1_6+spvRayQueryKHR+spvGroupNonUniform+spvGroupNonUniformBallot",
 		"-fvk-use-entrypoint-name",
 		"-fvk-use-scalar-layout",
 		"-matrix-layout-column-major",
