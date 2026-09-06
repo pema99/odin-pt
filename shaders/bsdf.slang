@@ -160,10 +160,10 @@ float4 fresnel_thin_film(
     float4 Rs_p = T121_p * T121_p * R23_p / (1.0 - R123_p);
 
     // .. end of airy summation
-    float4 cosP_s = cos_phi21_s * rsqrt(R23_s) * (cos_dphi * r23_s.real + sin_dphi * r23_s.imaginary);
+    float4 cosP_s = cos_phi21_s * rsqrt(R23_s) * (cos_dphi * r23_s.real - sin_dphi * r23_s.imaginary);
     float4 irid_s = (r123_s * cosP_s - r123_s * r123_s) / (1.0 - 2.0 * r123_s * cosP_s + r123_s * r123_s);
     float4 I_s = R12_s + Rs_s + 2.0 * (Rs_s - T121_s) * irid_s;
-    float4 cosP_p = cos_phi21_p * rsqrt(R23_p) * (cos_dphi * r23_p.real + sin_dphi * r23_p.imaginary);
+    float4 cosP_p = cos_phi21_p * rsqrt(R23_p) * (cos_dphi * r23_p.real - sin_dphi * r23_p.imaginary);
     float4 irid_p = (r123_p * cosP_p - r123_p * r123_p) / (1.0 - 2.0 * r123_p * cosP_p + r123_p * r123_p);
     float4 I_p = R12_p + Rs_p + 2.0 * (Rs_p - T121_p) * irid_p;
     return select(cos_theta_film_sq < 0.0, 1.0, 0.5 * (I_s + I_p));
