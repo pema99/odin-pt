@@ -128,7 +128,7 @@ public float4 get_material_absorption<let MODE : SpectralMode>(MaterialInfo mat,
     if (MODE == SpectralMode.RGB)
         transmittance = float4(mat.attenuation_color, 1.0);
     else
-        transmittance = upsample_ergb<MODE>(mat.attenuation_color, spectrum_basis);
+        transmittance = saturate(upsample_ergb<MODE>(mat.attenuation_color, spectrum_basis));
 
     // https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_volume/README.md#attenuation
     return -log(transmittance) / mat.attenuation_distance;
@@ -136,7 +136,7 @@ public float4 get_material_absorption<let MODE : SpectralMode>(MaterialInfo mat,
 
 public BSDF get_material_bsdf<let MODE : SpectralMode>(MaterialInfo mat, SpectrumBasis spectrum_basis, bool entering, float3 normal, float3 specular_normal)
 {
-    float4 albedo_spectrum = upsample_ergb<MODE>(mat.albedo, spectrum_basis);
+    float4 albedo_spectrum = saturate(upsample_ergb<MODE>(mat.albedo, spectrum_basis));
 
     BSDF bsdf = make_disney_bsdf(
         albedo_spectrum,
