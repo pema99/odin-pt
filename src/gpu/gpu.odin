@@ -609,6 +609,7 @@ compile_shader :: proc(path: string) -> (s: Shader, ok: bool) #optional_ok {
 		"-fvk-use-entrypoint-name",
 		"-fvk-use-scalar-layout",
 		"-matrix-layout-column-major",
+		"-O3",
 	}
 	if spProcessCommandLineArguments(request, raw_data(&args), len(args)) < 0 {
 		log.errorf("compile_shader %s: %s", path, spGetDiagnosticOutput(request))
