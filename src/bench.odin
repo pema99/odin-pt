@@ -29,8 +29,6 @@ app_bench :: proc(state: ^App_State, samples: u32) {
         }
         for spectral in ([]bool{false, true}) {
             state.spectral_mode = spectral ? .Spectral : .RGB
-            state.kernel_size = gpu.get_kernel_size(state.trace, spectral_mode_kernel(state.spectral_mode))
-            state.num_groups = ([2]u32{state.output.width, state.output.height} + state.kernel_size.xy - 1) / state.kernel_size.xy
             app_load_scene(state, index)
             gpu_total: f64
             gpu_frames: u32

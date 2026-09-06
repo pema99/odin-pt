@@ -23,36 +23,105 @@ cbuffer Camera // TODO: Don't need cbuffer for this...
 };
 
 RWTexture2D<float4> image;
+RWStructuredBuffer<uint> next_pixel;
 
-void trace<let MODE : SpectralMode>(uint3 id)
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void reset()
 {
-    if (any(id.xy >= screen_size))
-        return;
+    next_pixel[0] = 0;
+}
 
-    // Init primary ray
-    float2 jitter = kronecker_2d(id.xy, frame, RNG_DIM_JITTER);
-    float2 lens_rng = kronecker_2d(id.xy, frame, RNG_DIM_LENS);
-    float3 ray_origin = cam_pos;
-    float3 ray_direction = primary_ray_direction(id.xy + jitter, screen_size, cam_right, cam_up, cam_forward, fov);
-    apply_aperture(ray_origin, ray_direction, cam_right, cam_up, cam_forward, aperture, focus_distance, lens_rng);
+// Get the next available pixel to render
+bool claim_pixel(out uint2 pixel_coord)
+{
+    const uint2 tile_shape = uint2(4, 8);
+    const uint2 num_tiles = (screen_size + tile_shape - 1) / tile_shape;
+    const uint tile_size = tile_shape.x * tile_shape.y;
+    const uint total_tiled = num_tiles.x * num_tiles.y * tile_size;
 
+    pixel_coord = 0;
+    while (true)
+    {
+        // Write once for the entire wave to avoid some atomic contention
+        uint dead_lanes_in_wave = WaveActiveCountBits(true);
+        uint dead_index_in_wave = WavePrefixCountBits(true);
+        uint first_dead_in_wave = 0;
+        if (WaveIsFirstLane())
+            InterlockedAdd(next_pixel[0], dead_lanes_in_wave, first_dead_in_wave);
+
+        uint pixel_index = WaveReadLaneFirst(first_dead_in_wave) + dead_index_in_wave;
+        if (pixel_index >= total_tiled)
+            return false;
+
+        // Map selected 1D pixel index -> 2D pixel coord
+        uint tile_index = pixel_index / tile_size;
+        uint within_index = pixel_index % tile_size;
+        uint2 tile   = uint2(tile_index % num_tiles.x,   tile_index / num_tiles.x);
+        uint2 within = uint2(within_index % tile_shape.x, within_index / tile_shape.x);
+        pixel_coord = tile * tile_shape + within;
+        if (all(pixel_coord < screen_size))
+            return true;
+    }
+}
+
+// Store a finished pixel
+void store_pixel(uint2 coord, float3 color)
+{
+    float3 prev = sample_count == 0 ? color : image[coord].rgb;
+    image[coord] = float4(lerp(prev, color, 1.0 / (sample_count + 1)), 1.0);
+}
+
+void trace<let MODE : SpectralMode>()
+{
+    // Path state
+    uint2 pixel_coord = 0;
+    float3 ray_origin = 0;
+    float3 ray_direction = 0;
     float4 throughput = 1;
-    float previous_bsdf_density = 0.0;
-    bool previous_bounce_delta = false;
     float4 density_to_hero_ratio = 1;
     float4 medium_absorption = 0.0;
-
-    float4 wavelengths = 0;
     SpectrumBasis spectrum_basis = SpectrumBasis();
-    if (MODE != SpectralMode.RGB)
-    {
-        wavelengths = sample_wavelengths(kronecker_2d(id.xy, frame, RNG_DIM_WAVELENGTH).x);
-        spectrum_basis = get_spectrum_basis(wavelengths);
-    }
-
+    float previous_bsdf_density = 0.0;
+    bool previous_bounce_delta = false;
     float3 color = 0.0;
-    for (uint depth = 0; depth < max_bounces; depth++)
+    uint depth = 0;
+
+    bool active = false;
+    while (true)
     {
+        // Dead path, generate a new primary ray
+        if (!active)
+        {
+            if (!claim_pixel(pixel_coord))
+                return;
+
+            // Init primary ray
+            float2 jitter = kronecker_2d(pixel_coord, frame, RNG_DIM_JITTER);
+            float2 lens_rng = kronecker_2d(pixel_coord, frame, RNG_DIM_LENS);
+            ray_origin = cam_pos;
+            ray_direction = primary_ray_direction(pixel_coord + jitter, screen_size, cam_right, cam_up, cam_forward, fov);
+            apply_aperture(ray_origin, ray_direction, cam_right, cam_up, cam_forward, aperture, focus_distance, lens_rng);
+
+            throughput = 1;
+            previous_bsdf_density = 0.0;
+            previous_bounce_delta = false;
+            density_to_hero_ratio = 1;
+            medium_absorption = 0.0;
+
+            float4 wavelengths = 0;
+            spectrum_basis = SpectrumBasis();
+            if (MODE != SpectralMode.RGB)
+            {
+                wavelengths = sample_wavelengths(kronecker_2d(pixel_coord, frame, RNG_DIM_WAVELENGTH).x);
+                spectrum_basis = get_spectrum_basis(wavelengths);
+            }
+
+            color = 0.0;
+            depth = 0;
+            active = true;
+        }
+
         Hit hit = trace_ray(ray_origin, ray_direction);
         if (hit.is_valid())
         {
@@ -90,8 +159,8 @@ void trace<let MODE : SpectralMode>(uint3 id)
                 bsdf.has_continuous_lobe() &&
                 nee_mode != NEEMode.BSDFSampling)
             {
-                float2 pick_rng = kronecker_2d(id.xy, frame, RNG_DIMS_NEE_PICK + depth * RNG_DIMS_PER_BOUNCE);
-                float2 point_rng = kronecker_2d(id.xy, frame, RNG_DIMS_NEE_POINT + depth * RNG_DIMS_PER_BOUNCE);
+                float2 pick_rng = kronecker_2d(pixel_coord, frame, RNG_DIMS_NEE_PICK + depth * RNG_DIMS_PER_BOUNCE);
+                float2 point_rng = kronecker_2d(pixel_coord, frame, RNG_DIMS_NEE_POINT + depth * RNG_DIMS_PER_BOUNCE);
                 LightSample nee_sample = sample_emissive_triangle(hit_info.position, pick_rng, point_rng);
                 if (nee_sample.is_valid())
                 {
@@ -134,13 +203,17 @@ void trace<let MODE : SpectralMode>(uint3 id)
             bsdf.sample(
                 view_direction,
                 hit_info.geometric_normal,
-                kronecker_2d(id.xy, frame, scatter_dim),
+                kronecker_2d(pixel_coord, frame, scatter_dim),
                 sample_direction,
                 bsdf_value_times_cosine,
                 bsdf_density,
                 bsdf_is_delta);
             if (bsdf_density[0] <= 0.0)
-                break;
+            {
+                store_pixel(pixel_coord, color);
+                active = false;
+                continue;
+            }
 
             previous_bsdf_density = bsdf_density[0];
             previous_bounce_delta = bsdf_is_delta;
@@ -154,8 +227,12 @@ void trace<let MODE : SpectralMode>(uint3 id)
             {
                 uint russian_roulette_dim = RNG_DIM_RUSSIAN_ROULETTE + depth * RNG_DIMS_PER_BOUNCE;
                 float russian_roulette_probability = min(1.0, max(throughput.x, max(throughput.y, max(throughput.z, throughput.w))));
-                if (kronecker_2d(id.xy, frame, russian_roulette_dim).x > russian_roulette_probability)
-                    break;
+                if (kronecker_2d(pixel_coord, frame, russian_roulette_dim).x > russian_roulette_probability)
+                {
+                    store_pixel(pixel_coord, color);
+                    active = false;
+                    continue;
+                }
                 throughput *= rcp(russian_roulette_probability);
             }
 
@@ -175,6 +252,13 @@ void trace<let MODE : SpectralMode>(uint3 id)
                 : hit_info.geometric_normal;
             ray_origin = apply_normal_bias(hit_info.position, bias_normal);
             ray_direction = sample_direction;
+
+            depth++;
+            if (depth >= max_bounces)
+            {
+                store_pixel(pixel_coord, color);
+                active = false;
+            }
         }
         else
         {
@@ -183,17 +267,16 @@ void trace<let MODE : SpectralMode>(uint3 id)
                 throughput * upsample_ergb<MODE>(sky_color, spectrum_basis),
                 density_to_hero_ratio,
                 spectrum_basis);
-            break;
+            store_pixel(pixel_coord, color);
+            active = false;
         }
     }
-    float3 prev = sample_count == 0 ? color : image[id.xy].rgb;
-    image[id.xy] = float4(lerp(prev, color, 1.0 / (sample_count + 1)), 1.0);
 }
 
 [shader("compute")]
-[numthreads(8, 8, 1)]
-void main_rgb(uint3 id: SV_DispatchThreadID) { trace<SpectralMode.RGB>(id); }
+[numthreads(512, 1, 1)]
+void main_rgb(uint3 id: SV_DispatchThreadID) { trace<SpectralMode.RGB>(); }
 
 [shader("compute")]
-[numthreads(8, 8, 1)]
-void main_spectral(uint3 id: SV_DispatchThreadID) { trace<SpectralMode.Spectral>(id); }
+[numthreads(512, 1, 1)]
+void main_spectral(uint3 id: SV_DispatchThreadID) { trace<SpectralMode.Spectral>(); }

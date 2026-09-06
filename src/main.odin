@@ -28,6 +28,7 @@ import "gpu"
 // Constants
 WIDTH  : u32 : 1280
 HEIGHT : u32 : 720
+TRACE_GROUPS :: 512 // how many groups to keep in flight at once
 
 // Structs and enums
 Camera :: struct {
@@ -69,10 +70,6 @@ camera_look :: proc(c: ^Camera, forward: [3]f32) {
 	c.up = linalg.cross(c.right, c.forward)
 }
 
-spectral_mode_kernel :: proc(mode: Spectral_Mode) -> string {
-    return mode == .RGB ? "main_rgb" : "main_spectral"
-}
-
 shaders_last_write :: proc() -> (newest: time.Time) {
     f, _ := os.open("shaders")
     defer os.close(f)
@@ -106,8 +103,9 @@ App_State :: struct {
     output: gpu.Texture,
     output_postfx: gpu.Texture,
     picking_buffer: gpu.Buffer,
-    kernel_size: [3]u32,
-    num_groups: [2]u32,
+    next_pixel_buffer: gpu.Buffer,
+    postfx_kernel_size: [3]u32,
+    postfx_num_groups: [2]u32,
 
     // Frame state
     cam: Camera,
@@ -215,10 +213,11 @@ app_init :: proc() -> App_State {
 
     state.output = gpu.create_texture(WIDTH, HEIGHT, .R32G32B32A32_SFLOAT, writable = true)
     state.output_postfx = gpu.create_texture(WIDTH, HEIGHT, .R32G32B32A32_SFLOAT, writable = true)
-    state.kernel_size = gpu.get_kernel_size(state.trace, spectral_mode_kernel(state.spectral_mode))
-    state.num_groups = ([2]u32{WIDTH, HEIGHT} + state.kernel_size.xy - 1) / state.kernel_size.xy
+    state.postfx_kernel_size = gpu.get_kernel_size(state.postfx, "main")
+    state.postfx_num_groups = ([2]u32{WIDTH, HEIGHT} + state.postfx_kernel_size.xy - 1) / state.postfx_kernel_size.xy
 
     state.picking_buffer = gpu.create_buffer(size_of(Pick_Object), true)
+    state.next_pixel_buffer = gpu.create_buffer(size_of(u32), true)
 
     state.last_mouse.x, state.last_mouse.y = glfw.GetCursorPos(gpu.get_window())
     state.last_time = glfw.GetTime()
@@ -231,6 +230,7 @@ app_delete :: proc(state: ^App_State) {
     gpu.destroy_texture(state.output)
     gpu.destroy_texture(state.output_postfx)
     gpu.destroy_buffer(state.picking_buffer)
+    gpu.destroy_buffer(state.next_pixel_buffer)
     gpu.destroy_shader(state.trace)
     gpu.destroy_shader(state.postfx)
     gpu.destroy_shader(state.picking)
@@ -284,7 +284,7 @@ app_tick :: proc(state: ^App_State) {
         gpu.destroy_texture(state.output_postfx)
         state.output = gpu.create_texture(u32(framebuffer_width), u32(framebuffer_height), .R32G32B32A32_SFLOAT, writable = true)
         state.output_postfx = gpu.create_texture(u32(framebuffer_width), u32(framebuffer_height), .R32G32B32A32_SFLOAT, writable = true)
-        state.num_groups = ([2]u32{u32(framebuffer_width), u32(framebuffer_height)} + state.kernel_size.xy - 1) / state.kernel_size.xy
+        state.postfx_num_groups = ([2]u32{u32(framebuffer_width), u32(framebuffer_height)} + state.postfx_kernel_size.xy - 1) / state.postfx_kernel_size.xy
         state.sample_count = 0
     }
 
@@ -300,8 +300,6 @@ app_tick :: proc(state: ^App_State) {
         if new_trace, ok := gpu.compile_shader(state.shader_path); ok {
             gpu.destroy_shader(state.trace)
             state.trace = new_trace
-            state.kernel_size = gpu.get_kernel_size(state.trace, spectral_mode_kernel(state.spectral_mode))
-            state.num_groups = ([2]u32{state.output.width, state.output.height} + state.kernel_size.xy - 1) / state.kernel_size.xy
             state.sample_count = 0
         }
         if new_postfx, ok := gpu.compile_shader(state.postfx_shader_path); ok {
@@ -325,7 +323,8 @@ app_do_frame :: proc(state: ^App_State) {
     trace := state.trace
     postfx := state.postfx
     scene := &state.scene
-    trace_kernel := spectral_mode_kernel(state.spectral_mode)
+    trace_kernel := state.spectral_mode == .RGB ? "main_rgb" : "main_spectral"
+    reset_kernel := "reset"
 
     gpu.start_frame()
 
@@ -369,7 +368,10 @@ app_do_frame :: proc(state: ^App_State) {
         gpu.set_buffer(cmd, trace, trace_kernel, "materials", scene.material_pool.materials.buffer)
         gpu.set_texture_array(cmd, trace, trace_kernel, "textures", scene.material_pool.textures)
         gpu.set_texture(cmd, trace, trace_kernel, "image", state.output)
-        gpu.dispatch(cmd, trace, trace_kernel, state.num_groups.x, state.num_groups.y)
+        gpu.set_buffer(cmd, trace, trace_kernel, "next_pixel", state.next_pixel_buffer)
+        gpu.set_buffer(cmd, trace, reset_kernel, "next_pixel", state.next_pixel_buffer)
+        gpu.dispatch(cmd, trace, reset_kernel, 1)
+        gpu.dispatch(cmd, trace, trace_kernel, TRACE_GROUPS)
 
         // Tonemap
         display := state.output
@@ -379,7 +381,7 @@ app_do_frame :: proc(state: ^App_State) {
             gpu.set_uniform(cmd, postfx, "main", "exposure", state.exposure)
             gpu.set_texture(cmd, postfx, "main", "input", state.output)
             gpu.set_texture(cmd, postfx, "main", "output", state.output_postfx)
-            gpu.dispatch(cmd, postfx, "main", state.num_groups.x, state.num_groups.y)
+            gpu.dispatch(cmd, postfx, "main", state.postfx_num_groups.x, state.postfx_num_groups.y)
             display = state.output_postfx
         }
 
