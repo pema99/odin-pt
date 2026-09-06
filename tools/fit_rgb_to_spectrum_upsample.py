@@ -68,6 +68,9 @@ c[3*n:] = 1.0
 res = linprog(c, A_ub, b_ub, A_eq, b_eq,
               bounds=[(0, 1)]*(3*n) + [(0, None)]*3, method="highs")
 basis = np.clip(res.x[:3*n].reshape(3, n).T, 0.0, 1.0)
+basis = np.round(basis, 6)
+overshoot = np.maximum(np.round(basis.sum(1) - 1.0, 6), 0.0)
+basis[np.arange(n), basis.argmax(1)] -= overshoot
 
 print("public static const int RGB_TO_SPECTRUM_LUT_SIZE = %d;" % n)
 print("")
