@@ -26,7 +26,7 @@ import "gpu"
 // - COmplex IOR for metal
 
 // Constants
-WIDTH : u32 : 1280
+WIDTH  : u32 : 1280
 HEIGHT : u32 : 720
 
 // Structs and enums
@@ -458,6 +458,7 @@ app_do_gui :: proc(state: ^App_State) -> (sample_dirty: bool, material_dirty: bo
         material_dirty |= imgui.SliderFloat("Metallic", &state.pick_material.metallic, 0.0, 1.0)
         material_dirty |= imgui.SliderFloat("Roughness", &state.pick_material.roughness, 0.0, 1.0)
         material_dirty |= imgui.SliderFloat("IOR", &state.pick_material.index_of_refraction, 1.0, 3.0)
+        material_dirty |= imgui.SliderFloat("Extinction", &state.pick_material.extinction, 0.0, 10.0)
 
         imgui.SeparatorText("Emission")
         emission := state.pick_material.emission

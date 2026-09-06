@@ -10,6 +10,7 @@ public struct MaterialInfo
     public float metallic;
     public float roughness;
     public float index_of_refraction;
+    public float extinction;
     public float dispersion;
     public float iridescence_factor;
     public float iridescence_ior;
@@ -138,11 +139,12 @@ public BSDF get_material_bsdf<let MODE : SpectralMode>(MaterialInfo mat, Spectru
 {
     float4 albedo_spectrum = saturate(upsample_ergb<MODE>(mat.albedo, spectrum_basis));
 
-    BSDF bsdf = make_disney_bsdf(
+    BSDF bsdf = make_overkill_bsdf(
         albedo_spectrum,
         mat.metallic,
         mat.roughness,
         mat.index_of_refraction,
+        mat.extinction,
         MODE == SpectralMode.RGB ? 0.0 : mat.iridescence_factor,
         mat.iridescence_ior,
         mat.iridescence_thickness,

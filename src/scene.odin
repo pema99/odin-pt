@@ -1,6 +1,7 @@
 package main
 
 import "core:slice"
+import "core:encoding/json"
 import "core:strings"
 import vk "vendor:vulkan"
 import "core:path/filepath"
@@ -126,6 +127,7 @@ Material_Info :: struct {
     metallic: f32,
     roughness: f32,
     index_of_refraction: f32,
+    extinction: f32,
     dispersion: f32,
     iridescence_factor: f32,
     iridescence_ior: f32,
@@ -261,6 +263,7 @@ ai_texture_load :: proc(cmd: ^gpu.Cmd, scene: ^Scene, ai_scene: ^ai.Scene, path:
 }
 
 Gltf_Extra_Data :: struct {
+    extinction: f32,
     dispersion: f32,
     iridescence_factor: f32,
     iridescence_ior: f32,
@@ -285,6 +288,17 @@ gltf_read_extra_data :: proc(path: cstring, allocator := context.allocator) -> (
     unnamed = make(map[u32]Gltf_Extra_Data, allocator)
     for material, index in data.materials {
         extra: Gltf_Extra_Data
+        if material.extras.data != nil {
+            value, err := json.parse_string(string(cstring(material.extras.data)))
+            if err == nil {
+                if object, is_object := value.(json.Object); is_object {
+                    if entry, has := object["extinction"]; has {
+                        if number, is_number := entry.(json.Float); is_number do extra.extinction = f32(number)
+                    }
+                }
+            }
+            json.destroy_value(value)
+        }
         if material.has_dispersion {
             extra.dispersion = material.dispersion.dispersion
         }
@@ -401,6 +415,7 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
         metallic := f32(0)
         roughness := f32(1)
         index_of_refraction := f32(1.5)
+        extinction := f32(0.0)
         dispersion := f32(0.0)
         iridescence_factor := f32(0.0)
         iridescence_ior := f32(1.3)
@@ -441,6 +456,7 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
             extra, has_extra = unnamed_extra_data[material_index]
         }
         if has_extra {
+            extinction = extra.extinction
             dispersion = extra.dispersion
             iridescence_factor = extra.iridescence_factor
             iridescence_ior = extra.iridescence_ior
@@ -455,6 +471,7 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
             metallic = metallic,
             roughness = roughness,
             index_of_refraction = index_of_refraction,
+            extinction = extinction,
             dispersion = dispersion,
             iridescence_factor = iridescence_factor,
             iridescence_ior = iridescence_ior,

@@ -37,7 +37,7 @@ public enum BSDFType : uint
 public interface Fresnel
 {
     float4 evaluate(float v_dot_h);
-    float4 base_ior();
+    complex4 base_ior();
     float4 normal_incidence();
 }
 
@@ -45,23 +45,30 @@ public interface Fresnel
 // https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_iridescence/README.md
 float4 fresnel0_to_ior(float4 f0)
 {
-    float4 sqrt_f0 = sqrt(f0);
+    float4 sqrt_f0 = sqrt(min(f0, 0.9999));
     return (1.0 + sqrt_f0) / (1.0 - sqrt_f0);
 }
 
-// Estimate the real ior for conductor given f0 and the imaginary ior component
+// Complex ior for a conductor with normal incidence reflectance f0
 // Conductor fresnel at normal incidence is:
 //   f0 = ((n−1)^2 + k^2) / ((n+1)^2 + k^2)
 // Isolating 'n' gives:
 //   n = a +- sqrt(a^2 - 1 - k^2)
-// where a = (1+f0)/(1−f0). Take the negative root:
-//   n = (1 + k^2) / (a + sqrt(a^2 - 1 - k^2))
-float4 fresnel0_to_conductor_ior(float4 f0, float4 ior_k)
+// where a = (1+f0)/(1−f0). Take the negative root, scaled by (1−f0) so f0 = 1 gives n = 0:
+//   n = (1 + k^2)(1−f0) / ((1+f0) + sqrt(4*f0 - k^2*(1−f0)^2))
+// k defaults to the n = 1 solution, clamped to the largest k with a real root
+complex4 fresnel0_to_conductor_ior(float4 f0, float extinction)
 {
-    float4 a = (1.0+f0) / (1.0-f0);
-    float4 root = sqrt(max(a*a - 1.0 - ior_k*ior_k, 0.0));
-    float4 n = (1.0 + ior_k * ior_k) / (a + root);
-    return max(n, 1e-4);
+    float4 one_minus_f0 = 1.0 - f0;
+    float4 max_k = min(2.0 * sqrt(f0) / one_minus_f0, 1e4);
+    float4 ior_k = 2.0 * sqrt(f0) * rsqrt(one_minus_f0);
+    if (extinction > 0.0)
+        ior_k = extinction;
+    ior_k = min(ior_k, max_k);
+
+    float4 scaled_k = ior_k * one_minus_f0;
+    float4 root = sqrt(max(4.0 * f0 - scaled_k * scaled_k, 0.0));
+    return complex4((1.0 + ior_k * ior_k) * one_minus_f0 / (1.0 + f0 + root), ior_k);
 }
 
 // https://en.wikipedia.org/wiki/Schlick's_approximation
@@ -94,9 +101,8 @@ float4 fresnel_dielectric(float c, float4 eta)
 // https://pbr-book.org/4ed/Reflection_Models/Specular_Reflection_and_Transmission
 // https://github.com/mmp/pbrt-v4/blob/master/src/pbrt/util/scattering.h#L81
 // Complex valued fresnel for conductors
-public float4 fresnel_complex(float v_dot_h, float4 ior_n, float4 ior_k)
+public float4 fresnel_complex(float v_dot_h, complex4 eta)
 {
-    complex4 eta = complex4(ior_n, ior_k);
     float cos_theta_i = clamp(v_dot_h, 0, 1);
     float sin2_theta_i = 1.0 - (cos_theta_i*cos_theta_i);
     complex4 sin2_theta_t = sin2_theta_i / (eta*eta);
@@ -111,39 +117,39 @@ public float4 fresnel_complex(float v_dot_h, float4 ior_n, float4 ior_k)
 // Belcour & Barla, 2017, (eq. 10-11 + supplemental code)
 // https://hal.science/hal-01518344/document
 float4 fresnel_thin_film(
-    float v_dot_h, float4 ior_outside, float ior_film, float4 eta_base, float thickness, float4 wavelengths)
+    float v_dot_h, float4 ior_outside, float ior_film, complex4 eta_base, float thickness, float4 wavelengths)
 {
     float4 eta_film = ior_film / ior_outside;
 
     // https://en.wikipedia.org/wiki/Snell%27s_law#Vector_form
     float4 cos_theta_film_sq = 1.0 - (1.0 - v_dot_h * v_dot_h) / (eta_film * eta_film);
     float4 cos_theta_film = sqrt(max(cos_theta_film_sq, 0.0));
-    float4 cos_theta_base = sqrt(max(1.0 - (1.0 - v_dot_h * v_dot_h) / (eta_base * eta_base), 0.0));
+    complex4 cos_theta_base = sqrt(1.0 - (1.0 - v_dot_h * v_dot_h) / (eta_base * eta_base));
 
     // 12 = air->film, 23 = film->base
     // https://en.wikipedia.org/wiki/Fresnel_equations#Complex_amplitude_reflection_and_transmission_coefficients
     float4 r12_s = (v_dot_h - eta_film * cos_theta_film) / (v_dot_h + eta_film * cos_theta_film);
     float4 r12_p = (eta_film * v_dot_h - cos_theta_film) / (eta_film * v_dot_h + cos_theta_film);
-    float4 r23_s = (eta_film * cos_theta_film - eta_base * cos_theta_base)
+    complex4 r23_s = (eta_film * cos_theta_film - eta_base * cos_theta_base)
         / (eta_film * cos_theta_film + eta_base * cos_theta_base);
-    float4 r23_p = (eta_base * cos_theta_film - eta_film * cos_theta_base)
+    complex4 r23_p = (eta_base * cos_theta_film - eta_film * cos_theta_base)
         / (eta_base * cos_theta_film + eta_film * cos_theta_base);
 
     // signed amplitude -> phase, power
     float4 R12_s = r12_s * r12_s;
     float4 R12_p = r12_p * r12_p;
-    float4 R23_s = r23_s * r23_s;
-    float4 R23_p = r23_p * r23_p;
+    float4 R23_s = max(norm(r23_s), 1e-16);
+    float4 R23_p = max(norm(r23_p), 1e-16);
     float4 T121_s = 1.0 - R12_s;
     float4 T121_p = 1.0 - R12_p;
-    float4 phi21_s = PI - select(r12_s < 0.0, PI, 0.0);
-    float4 phi21_p = PI - select(r12_p < 0.0, PI, 0.0);
-    float4 phi23_s = select(r23_s < 0.0, PI, 0.0);
-    float4 phi23_p = select(r23_p < 0.0, PI, 0.0);
+    float4 cos_phi21_s = select(r12_s < 0.0, 1.0, -1.0);
+    float4 cos_phi21_p = select(r12_p < 0.0, 1.0, -1.0);
 
     // https://en.wikipedia.org/wiki/Thin-film_interference#Theory
     float4 optical_path_difference = 2.0 * ior_film * thickness * cos_theta_film;
     float4 Dphi = 2.0 * PI * optical_path_difference / wavelengths;
+    float4 cos_dphi = cos(Dphi);
+    float4 sin_dphi = sin(Dphi);
 
     // Start airy summation..
     float4 R123_s = min(R12_s * R23_s, 0.9999);
@@ -154,10 +160,10 @@ float4 fresnel_thin_film(
     float4 Rs_p = T121_p * T121_p * R23_p / (1.0 - R123_p);
 
     // .. end of airy summation
-    float4 cosP_s = cos(Dphi + phi23_s + phi21_s);
+    float4 cosP_s = cos_phi21_s * rsqrt(R23_s) * (cos_dphi * r23_s.real + sin_dphi * r23_s.imaginary);
     float4 irid_s = (r123_s * cosP_s - r123_s * r123_s) / (1.0 - 2.0 * r123_s * cosP_s + r123_s * r123_s);
     float4 I_s = R12_s + Rs_s + 2.0 * (Rs_s - T121_s) * irid_s;
-    float4 cosP_p = cos(Dphi + phi23_p + phi21_p);
+    float4 cosP_p = cos_phi21_p * rsqrt(R23_p) * (cos_dphi * r23_p.real + sin_dphi * r23_p.imaginary);
     float4 irid_p = (r123_p * cosP_p - r123_p * r123_p) / (1.0 - 2.0 * r123_p * cosP_p + r123_p * r123_p);
     float4 I_p = R12_p + Rs_p + 2.0 * (Rs_p - T121_p) * irid_p;
     return select(cos_theta_film_sq < 0.0, 1.0, 0.5 * (I_s + I_p));
@@ -173,9 +179,9 @@ public struct SchlickFresnel : Fresnel
         return fresnel_schlick(v_dot_h, f0);
     }
 
-    public float4 base_ior()
+    public complex4 base_ior()
     {
-        return fresnel0_to_ior(f0 + 0.0001);
+        return complex4(fresnel0_to_ior(f0));
     }
 
     public float4 normal_incidence()
@@ -187,22 +193,21 @@ public struct SchlickFresnel : Fresnel
 // Real fresnel for conductor (or dielectric)
 public struct ConductorFresnel : Fresnel
 {
-    public float4 ior_n;
-    public float4 ior_k;
+    public complex4 ior;
 
     public float4 evaluate(float v_dot_h)
     {
-        return fresnel_complex(v_dot_h, ior_n, ior_k);
+        return fresnel_complex(v_dot_h, ior);
     }
 
-    public float4 base_ior()
+    public complex4 base_ior()
     {
-        return ior_n;
+        return ior;
     }
 
     public float4 normal_incidence()
     {
-        return fresnel_complex(1.0, ior_n, ior_k);
+        return fresnel_complex(1.0, ior);
     }
 }
 
@@ -216,9 +221,9 @@ public struct DielectricFresnel : Fresnel
         return fresnel_dielectric(v_dot_h, eta);
     }
 
-    public float4 base_ior()
+    public complex4 base_ior()
     {
-        return eta;
+        return complex4(eta);
     }
 
     public float4 normal_incidence()
@@ -230,10 +235,10 @@ public struct DielectricFresnel : Fresnel
 // Real fresnel for both dielectric and conductor
 public struct RealFresnel : Fresnel
 {
-    public float4 ior_dielectric;
-    public float4 ior_conductor_n;
-    public float4 ior_conductor_k;
+    public float ior_dielectric;
+    public complex4 ior_conductor;
     public float metallic;
+    public float4 f0;
 
     public float4 evaluate(float v_dot_h)
     {
@@ -243,33 +248,19 @@ public struct RealFresnel : Fresnel
 
         float4 conductor = 0;
         if (metallic > 0)
-            conductor = fresnel_complex(v_dot_h, ior_conductor_n, ior_conductor_k);
+            conductor = fresnel_complex(v_dot_h, ior_conductor);
 
         return lerp(dielectric, conductor, metallic);
     }
 
-    public float4 base_ior()
+    public complex4 base_ior()
     {
-        return lerp(ior_dielectric, ior_conductor_n, metallic);
+        return complex4(lerp(ior_dielectric, ior_conductor.real, metallic), ior_conductor.imaginary * metallic);
     }
 
     public float4 normal_incidence()
     {
-        float4 dielectric = 0;
-        if (metallic < 1)
-        {
-            dielectric = (ior_dielectric - 1.0) * rcp(ior_dielectric + 1.0);
-            dielectric = dielectric*dielectric;
-        }
-        float4 conductor = 0;
-        if (metallic > 0)
-        {
-            float4 k2 = ior_conductor_k*ior_conductor_k;
-            float4 n_m = ior_conductor_n - 1.0;
-            float4 n_p = ior_conductor_n + 1.0;
-            conductor = (n_m*n_m + k2) / (n_p*n_p + k2);
-        }
-        return lerp(dielectric, conductor, metallic);
+        return f0;
     }
 }
 
@@ -292,7 +283,7 @@ public struct ThinFilmFresnel<F : Fresnel> : Fresnel
         return lerp(base_fresnel, thin_film, factor);
     }
 
-    public float4 base_ior()
+    public complex4 base_ior()
     {
         return base.base_ior();
     }
@@ -700,6 +691,55 @@ public DisneyBSDF make_disney_bsdf(
     return m;
 }
 
+// I call this the 'overkill' BSDF. my testing ground
+public typealias OverkillBSDF = MixtureBSDF<CookTorranceBSDF<ThinFilmFresnel<RealFresnel>>, LambertianBSDF, CoatingWeights>;
+
+public OverkillBSDF make_overkill_bsdf(
+    float4 albedo,
+    float metallic,
+    float roughness,
+    float ior,
+    float extinction,
+    float thin_film_factor,
+    float thin_film_ior,
+    float thin_film_thickness,
+    float3 normal,
+    float3 specular_normal,
+    float4 wavelengths)
+{
+    OverkillBSDF m;
+
+    float f0_dielectric_sqrt = (ior - 1.0) / (ior + 1.0);
+    float f0_dielectric = f0_dielectric_sqrt * f0_dielectric_sqrt;
+
+    m.bsdf_a.fresnel.base.ior_dielectric = ior;
+    m.bsdf_a.fresnel.base.ior_conductor = complex4(1.0);
+    m.bsdf_a.fresnel.base.metallic = metallic;
+    m.bsdf_a.fresnel.base.f0 = lerp(f0_dielectric, albedo, metallic);
+
+    if (metallic > 0.0)
+        m.bsdf_a.fresnel.base.ior_conductor = fresnel0_to_conductor_ior(albedo, extinction);
+
+    m.bsdf_a.fresnel.factor = thin_film_factor;
+    m.bsdf_a.fresnel.ior_outside = 1.0;
+    m.bsdf_a.fresnel.ior_film = thin_film_ior;
+    m.bsdf_a.fresnel.thickness = thin_film_thickness;
+    m.bsdf_a.fresnel.wavelengths = wavelengths;
+    m.bsdf_a.roughness = roughness;
+    m.bsdf_a.normal = specular_normal;
+
+    m.bsdf_b.albedo = albedo;
+    m.bsdf_b.normal = normal;
+
+    m.weighting.f0 = m.bsdf_a.fresnel.base.f0;
+    m.weighting.roughness = roughness;
+    m.weighting.base_weight = 1.0 - metallic;
+    m.weighting.base_albedo = albedo;
+    m.weighting.normal = specular_normal;
+
+    return m;
+}
+
 // === Glass BSDF ===
 
 public struct GlassBSDF<F : Fresnel> : BSDF
@@ -712,7 +752,7 @@ public struct GlassBSDF<F : Fresnel> : BSDF
     public void evaluate(float3 view_direction, float3 sample_direction,
         out float4 value_times_cosine, out float4 density)
     {
-        float4 eta = fresnel.base_ior();
+        float4 eta = fresnel.base_ior().real;
         value_times_cosine = 0.0;
         density = 0.0;
         if (all(eta == 1.0)) {
@@ -800,7 +840,7 @@ public struct GlassBSDF<F : Fresnel> : BSDF
     public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
         out float3 sample_direction, out float4 value_times_cosine, out float4 density, out bool is_delta)
     {
-        float4 eta = fresnel.base_ior();
+        float4 eta = fresnel.base_ior().real;
         if (all(eta == 1.0)) {
             // "pass through" material, just tints
             sample_direction = -view_direction;
@@ -858,7 +898,7 @@ public struct GlassBSDF<F : Fresnel> : BSDF
 
     public bool has_continuous_lobe()
     {
-        return roughness * roughness >= 1e-3 && !all(fresnel.base_ior() == 1.0);
+        return roughness * roughness >= 1e-3 && !all(fresnel.base_ior().real == 1.0);
     }
 }
 
