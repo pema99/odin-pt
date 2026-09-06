@@ -1,6 +1,9 @@
 import common;
 import geometry;
 import spectrum;
+import complex;
+
+// === Main BSDF interface ===
 
 public interface BSDF
 {
@@ -29,63 +32,36 @@ public enum BSDFType : uint
     Lambert,
 }
 
-// === Lambert ===
+// === Fresnel ===
 
-public struct LambertianBSDF : BSDF
+public interface Fresnel
 {
-    public float4 albedo;
-    public float3 normal;
-
-    public void evaluate(float3 view_direction, float3 sample_direction,
-        out float4 value_times_cosine, out float4 density)
-    {
-        float n_dot_l = max(0.0, dot(normal, sample_direction));
-        density = n_dot_l / PI;
-        value_times_cosine = albedo / PI * n_dot_l;
-    }
-
-    public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
-        out float3 sample_direction, out float4 value_times_cosine, out float4 density, out bool is_delta)
-    {
-        is_delta = false;
-        sample_direction = cosine_hemisphere(random_sample, normal);
-        evaluate(view_direction, sample_direction, value_times_cosine, density);
-
-        if (dot(geometric_normal, sample_direction) <= 0.0)
-        {
-            value_times_cosine = 0.0;
-            density = 0.0;
-        }
-    }
-
-    public bool has_continuous_lobe()
-    {
-        return true;
-    }
+    float4 evaluate(float v_dot_h);
+    float4 base_ior();
+    float4 normal_incidence();
 }
 
-// === PBR ===
-
-// Microfacet Models for Refraction through Rough Surfaces, Walter et al., 2007, (eq. 33)
-float ggx_ndf(float n_dot_h, float alpha)
+// Guesstimate an index of refraction for metals given their f0
+// https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_iridescence/README.md
+float4 fresnel0_to_ior(float4 f0)
 {
-    float alpha2 = alpha * alpha;
-    float denom = n_dot_h * n_dot_h * (alpha2 - 1.0) + 1.0;
-    return alpha2 / (PI * denom * denom);
+    float4 sqrt_f0 = sqrt(f0);
+    return (1.0 + sqrt_f0) / (1.0 - sqrt_f0);
 }
 
-float smith_ggx_helper(float n_dot_x, float alpha)
+// Estimate the real ior for conductor given f0 and the imaginary ior component
+// Conductor fresnel at normal incidence is:
+//   f0 = ((n−1)^2 + k^2) / ((n+1)^2 + k^2)
+// Isolating 'n' gives:
+//   n = a +- sqrt(a^2 - 1 - k^2)
+// where a = (1+f0)/(1−f0). Take the negative root:
+//   n = (1 + k^2) / (a + sqrt(a^2 - 1 - k^2))
+float4 fresnel0_to_conductor_ior(float4 f0, float4 ior_k)
 {
-    float alpha2 = alpha * alpha;
-    float cos2 = n_dot_x * n_dot_x;
-    float tan2 = (1.0 - cos2) / cos2;
-    return (sqrt(1.0 + alpha2 * tan2) - 1.0) * 0.5;
-}
-
-// Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs, Heitz, 2014, (eq. 99)
-float smith_ggx_geom(float n_dot_l, float n_dot_v, float alpha)
-{
-    return 1.0 / (1.0 + smith_ggx_helper(n_dot_l, alpha) + smith_ggx_helper(n_dot_v, alpha));
+    float4 a = (1.0+f0) / (1.0-f0);
+    float4 root = sqrt(max(a*a - 1.0 - ior_k*ior_k, 0.0));
+    float4 n = (1.0 + ior_k * ior_k) / (a + root);
+    return max(n, 1e-4);
 }
 
 // https://en.wikipedia.org/wiki/Schlick's_approximation
@@ -96,12 +72,40 @@ float4 fresnel_schlick(float v_dot_h, float4 f0)
     return f0 + (1.0 - f0) * f;
 }
 
-// Guesstimate an index of refraction for metals given their f0
-// https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_iridescence/README.md
-float4 fresnel0_to_ior(float4 f0)
+// Microfacet Models for Refraction through Rough Surfaces, Walter et al., 2007, (eq. 22)
+float fresnel_dielectric(float c, float eta)
 {
-    float4 sqrt_f0 = sqrt(f0);
-    return (1.0 + sqrt_f0) / (1.0 - sqrt_f0);
+    float g2 = eta * eta - 1.0 + c * c;
+    float g = sqrt(max(g2, 0.0));
+    float a = (g - c) / (g + c);
+    float b = (c * (g + c) - 1.0) / (c * (g - c) + 1.0);
+    return 0.5 * a * a * (1.0 + b * b);
+}
+
+// Same as above but vectorized
+float4 fresnel_dielectric(float c, float4 eta)
+{
+    float4 g2 = eta * eta - 1.0 + c * c;
+    float4 g = sqrt(max(g2, 0.0));
+    float4 a = (g - c) / (g + c);
+    float4 b = (c * (g + c) - 1.0) / (c * (g - c) + 1.0);
+    return 0.5 * a * a * (1.0 + b * b);
+}
+
+// https://pbr-book.org/4ed/Reflection_Models/Specular_Reflection_and_Transmission
+// https://github.com/mmp/pbrt-v4/blob/master/src/pbrt/util/scattering.h#L81
+// Complex valued fresnel for conductors
+public float4 fresnel_complex(float v_dot_h, float4 ior_n, float4 ior_k)
+{
+    complex4 eta = complex4(ior_n, ior_k);
+    float cos_theta_i = clamp(v_dot_h, 0, 1);
+    float sin2_theta_i = 1.0 - (cos_theta_i*cos_theta_i);
+    complex4 sin2_theta_t = sin2_theta_i / (eta*eta);
+    complex4 cos_theta_t = sqrt(1.0 - sin2_theta_t);
+
+    complex4 r_parl = (eta * cos_theta_i - cos_theta_t) / (eta * cos_theta_i + cos_theta_t);
+    complex4 r_perp = (cos_theta_i - eta * cos_theta_t) / (cos_theta_i + eta * cos_theta_t);
+    return (norm(r_parl) + norm(r_perp)) / 2;
 }
 
 // A Practical Extension to Microfacet Theory for the Modeling of Varying Iridescence,
@@ -160,13 +164,7 @@ float4 fresnel_thin_film(
     return select(cos_theta_film_sq < 0.0, 1.0, 0.5 * (I_s + I_p));
 }
 
-public interface Fresnel
-{
-    float4 evaluate(float v_dot_h);
-    float4 base_ior();
-    float4 normal_incidence();
-}
-
+// Schlick fresnel
 public struct SchlickFresnel : Fresnel
 {
     public float4 f0;
@@ -187,6 +185,29 @@ public struct SchlickFresnel : Fresnel
     }
 }
 
+// Real fresnel for conductor (or dielectric)
+public struct ConductorFresnel : Fresnel
+{
+    public float4 ior_n;
+    public float4 ior_k;
+
+    public float4 evaluate(float v_dot_h)
+    {
+        return fresnel_complex(v_dot_h, ior_n, ior_k);
+    }
+
+    public float4 base_ior()
+    {
+        return ior_n;
+    }
+
+    public float4 normal_incidence()
+    {
+        return fresnel_complex(1.0, ior_n, ior_k);
+    }
+}
+
+// Real fresnel for dielectric
 public struct DielectricFresnel : Fresnel
 {
     public float4 eta;
@@ -207,6 +228,53 @@ public struct DielectricFresnel : Fresnel
     }
 }
 
+// Real fresnel for both dielectric and conductor
+public struct SpecularFresnel : Fresnel
+{
+    public float4 ior_dielectric;
+    public float4 ior_conductor_n;
+    public float4 ior_conductor_k;
+    public float metallic;
+
+    public float4 evaluate(float v_dot_h)
+    {
+        float4 dielectric = 0;
+        if (metallic < 1)
+            dielectric = fresnel_dielectric(v_dot_h, ior_dielectric);
+
+        float4 conductor = 0;
+        if (metallic > 0)
+            conductor = fresnel_complex(v_dot_h, ior_conductor_n, ior_conductor_k);
+
+        return lerp(dielectric, conductor, metallic);
+    }
+
+    public float4 base_ior()
+    {
+        return lerp(ior_dielectric, ior_conductor_n, metallic);
+    }
+
+    public float4 normal_incidence()
+    {
+        float4 dielectric = 0;
+        if (metallic < 1)
+        {
+            dielectric = (ior_dielectric - 1.0) * rcp(ior_dielectric + 1.0);
+            dielectric = dielectric*dielectric;
+        }
+        float4 conductor = 0;
+        if (metallic > 0)
+        {
+            float4 k2 = ior_conductor_k*ior_conductor_k;
+            float4 n_m = ior_conductor_n - 1.0;
+            float4 n_p = ior_conductor_n + 1.0;
+            conductor = (n_m*n_m + k2) / (n_p*n_p + k2);
+        }
+        return lerp(dielectric, conductor, metallic);
+    }
+}
+
+// Thin film (iridescent) fresnel layer
 public struct ThinFilmFresnel<F : Fresnel> : Fresnel
 {
     public F base;
@@ -218,10 +286,11 @@ public struct ThinFilmFresnel<F : Fresnel> : Fresnel
 
     public float4 evaluate(float v_dot_h)
     {
+        float4 base_fresnel = base.evaluate(v_dot_h);
         if (factor <= 0.0)
-            return base.evaluate(v_dot_h);
+            return base_fresnel;
         float4 thin_film = fresnel_thin_film(v_dot_h, ior_outside, ior_film, base.base_ior(), thickness, wavelengths);
-        return lerp(base.evaluate(v_dot_h), thin_film, factor);
+        return lerp(base_fresnel, thin_film, factor);
     }
 
     public float4 base_ior()
@@ -233,6 +302,65 @@ public struct ThinFilmFresnel<F : Fresnel> : Fresnel
     {
         return base.normal_incidence();
     }
+}
+
+// === Lambert BSDF ===
+
+public struct LambertianBSDF : BSDF
+{
+    public float4 albedo;
+    public float3 normal;
+
+    public void evaluate(float3 view_direction, float3 sample_direction,
+        out float4 value_times_cosine, out float4 density)
+    {
+        float n_dot_l = max(0.0, dot(normal, sample_direction));
+        density = n_dot_l / PI;
+        value_times_cosine = albedo / PI * n_dot_l;
+    }
+
+    public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
+        out float3 sample_direction, out float4 value_times_cosine, out float4 density, out bool is_delta)
+    {
+        is_delta = false;
+        sample_direction = cosine_hemisphere(random_sample, normal);
+        evaluate(view_direction, sample_direction, value_times_cosine, density);
+
+        if (dot(geometric_normal, sample_direction) <= 0.0)
+        {
+            value_times_cosine = 0.0;
+            density = 0.0;
+        }
+    }
+
+    public bool has_continuous_lobe()
+    {
+        return true;
+    }
+}
+
+// === PBR BSDF ===
+
+// Microfacet Models for Refraction through Rough Surfaces, Walter et al., 2007, (eq. 33)
+float ggx_ndf(float n_dot_h, float alpha)
+{
+    float alpha2 = alpha * alpha;
+    float denom = n_dot_h * n_dot_h * (alpha2 - 1.0) + 1.0;
+    return alpha2 / (PI * denom * denom);
+}
+
+float smith_ggx_helper(float n_dot_x, float alpha)
+{
+    float alpha2 = alpha * alpha;
+    float cos2 = n_dot_x * n_dot_x;
+    float tan2 = (1.0 - cos2) / cos2;
+    return (sqrt(1.0 + alpha2 * tan2) - 1.0) * 0.5;
+}
+
+// Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs, Heitz, 2014, (eq. 99)
+float smith_ggx_geom(float n_dot_l, float n_dot_v, float alpha)
+{
+    return 1.0 / (1.0 + smith_ggx_helper(n_dot_l, alpha) + smith_ggx_helper(n_dot_v, alpha));
 }
 
 // Microfacet Models for Refraction through Rough Surfaces, Walter et al., 2007, (eq. 20)
@@ -397,7 +525,7 @@ public struct CookTorranceBSDF<F : Fresnel> : BSDF
     }
 }
 
-// === Mixture ===
+// === Mixture BSDF ===
 
 public interface BSDFMixWeights
 {
@@ -572,26 +700,7 @@ public DisneyBSDF make_disney_bsdf(
     return m;
 }
 
-// === Glass ===
-// Microfacet Models for Refraction through Rough Surfaces, Walter et al., 2007, (eq. 22)
-float fresnel_dielectric(float c, float eta)
-{
-    float g2 = eta * eta - 1.0 + c * c;
-    float g = sqrt(max(g2, 0.0));
-    float a = (g - c) / (g + c);
-    float b = (c * (g + c) - 1.0) / (c * (g - c) + 1.0);
-    return 0.5 * a * a * (1.0 + b * b);
-}
-
-// Same as above but vectorized
-float4 fresnel_dielectric(float c, float4 eta)
-{
-    float4 g2 = eta * eta - 1.0 + c * c;
-    float4 g = sqrt(max(g2, 0.0));
-    float4 a = (g - c) / (g + c);
-    float4 b = (c * (g + c) - 1.0) / (c * (g - c) + 1.0);
-    return 0.5 * a * a * (1.0 + b * b);
-}
+// === Glass BSDF ===
 
 public struct GlassBSDF<F : Fresnel> : BSDF
 {
@@ -738,7 +847,7 @@ public struct GlassBSDF<F : Fresnel> : BSDF
         {
             evaluate(view_direction, sample_direction, value_times_cosine, density);
         }
-        
+
         float geometric_side = dot(geometric_normal, sample_direction);
         if (dot(normal, sample_direction) > 0.0 ? geometric_side <= 0.0 : geometric_side >= 0.0)
         {
