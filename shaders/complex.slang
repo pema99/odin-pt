@@ -59,6 +59,16 @@ public Complex<n> operator-<let n : uint>(float a, Complex<n> b) { return Comple
 public Complex<n> operator*<let n : uint>(float a, Complex<n> b) { return Complex<n>(a) * b; }
 public Complex<n> operator/<let n : uint>(float a, Complex<n> b) { return Complex<n>(a) / b; }
 
+public Complex<n> operator+<let n : uint>(Complex<n> a, vector<float, n> b) { return a + Complex<n>(b); }
+public Complex<n> operator-<let n : uint>(Complex<n> a, vector<float, n> b) { return a - Complex<n>(b); }
+public Complex<n> operator*<let n : uint>(Complex<n> a, vector<float, n> b) { return a * Complex<n>(b); }
+public Complex<n> operator/<let n : uint>(Complex<n> a, vector<float, n> b) { return a / Complex<n>(b); }
+
+public Complex<n> operator+<let n : uint>(vector<float, n> a, Complex<n> b) { return Complex<n>(a) + b; }
+public Complex<n> operator-<let n : uint>(vector<float, n> a, Complex<n> b) { return Complex<n>(a) - b; }
+public Complex<n> operator*<let n : uint>(vector<float, n> a, Complex<n> b) { return Complex<n>(a) * b; }
+public Complex<n> operator/<let n : uint>(vector<float, n> a, Complex<n> b) { return Complex<n>(a) / b; }
+
 public vector<float, n> norm<let n : uint>(Complex<n> z)
 {
     return z.real * z.real + z.imaginary * z.imaginary;
