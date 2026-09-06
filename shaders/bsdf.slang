@@ -219,7 +219,7 @@ public struct DielectricFresnel : Fresnel
 }
 
 // Real fresnel for both dielectric and conductor
-public struct SpecularFresnel : Fresnel
+public struct RealFresnel : Fresnel
 {
     public float4 ior_dielectric;
     public float4 ior_conductor_n;
@@ -651,6 +651,7 @@ public struct CoatingWeights : BSDFMixWeights
     }
 }
 
+// Disney 'inspired' BSDF
 public typealias DisneyBSDF = MixtureBSDF<CookTorranceBSDF<ThinFilmFresnel<SchlickFresnel>>, LambertianBSDF, CoatingWeights>;
 
 public DisneyBSDF make_disney_bsdf(
