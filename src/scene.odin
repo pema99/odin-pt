@@ -10,6 +10,8 @@ import cgltf "vendor:cgltf"
 import ai "lib:assimp"
 import stbi "vendor:stb/image"
 import "gpu"
+import "core:thread"
+import "core:sys/info"
 
 // TODO: Removing support for meshes, materials, instances
 
@@ -228,16 +230,54 @@ scene_load_node :: proc(scene: ^Scene, node: ^ai.Node, transform: ai.Matrix4x4) 
     }
 }
 
-ai_texture_load :: proc(cmd: ^gpu.Cmd, scene: ^Scene, ai_scene: ^ai.Scene, path: cstring, material: ^ai.Material, type: ai.TextureType) -> u32 {
+Decoded_Texture :: struct {
+    source: ^ai.Texture,
+    pixels: [^]u8,
+    width: i32,
+    height: i32,
+}
+
+decode_embedded_textures :: proc(ai_scene: ^ai.Scene) -> map[^ai.Texture]Decoded_Texture {
+    results := make([]Decoded_Texture, ai_scene.mNumTextures)
+    defer delete(results)
+
+    _, logical_cores, _ := info.cpu_core_count()
+    pool: thread.Pool
+    thread.pool_init(&pool, context.allocator, max(logical_cores, 1))
+    for texture_index: u32 = 0; texture_index < ai_scene.mNumTextures; texture_index += 1 {
+        results[texture_index].source = ai_scene.mTextures[texture_index]
+        if ai_scene.mTextures[texture_index].mHeight == 0 {
+            thread.pool_add_task(&pool, context.allocator, proc(task: thread.Task) {
+                decoded := (^Decoded_Texture)(task.data)
+                channels: i32
+                decoded.pixels = stbi.load_from_memory(cast([^]u8)decoded.source.pcData, i32(decoded.source.mWidth), &decoded.width, &decoded.height, &channels, 4)
+            }, &results[texture_index])
+        }
+    }
+    thread.pool_start(&pool)
+    thread.pool_finish(&pool)
+    thread.pool_destroy(&pool)
+
+    decoded := make(map[^ai.Texture]Decoded_Texture, len(results))
+    for result in results {
+        decoded[result.source] = result
+    }
+    return decoded
+}
+
+ai_texture_load :: proc(cmd: ^gpu.Cmd, scene: ^Scene, ai_scene: ^ai.Scene, decoded_textures: map[^ai.Texture]Decoded_Texture, path: cstring, material: ^ai.Material, type: ai.TextureType) -> u32 {
     albedo_texture_index := max(u32)
     tex_path: ai.String
     if ai.GetMaterialTexture(material, type, 0, &tex_path, nil, nil, nil, nil, nil, nil) == .SUCCESS {
         tex_name := cstring(cast([^]u8)&tex_path.data[0])
         width, height, channels: i32
         pixels: [^]u8
-        if embedded := ai.GetEmbeddedTexture(ai_scene, tex_name); embedded != nil {
-            if embedded.mHeight == 0 {
-                pixels = stbi.load_from_memory(cast([^]u8)embedded.pcData, i32(embedded.mWidth), &width, &height, &channels, 4)
+        embedded := ai.GetEmbeddedTexture(ai_scene, tex_name)
+        if embedded != nil {
+            if decoded, found := decoded_textures[embedded]; found {
+                pixels = decoded.pixels
+                width = decoded.width
+                height = decoded.height
             }
         } else {
             dir := filepath.dir(string(path))
@@ -255,7 +295,9 @@ ai_texture_load :: proc(cmd: ^gpu.Cmd, scene: ^Scene, ai_scene: ^ai.Scene, path:
             }
             texture := gpu.create_texture(u32(width), u32(height), format)
             gpu.upload_texture(cmd, texture, pixels[:width * height * 4])
-            stbi.image_free(pixels)
+            if embedded == nil {
+                stbi.image_free(pixels)
+            }
             albedo_texture_index = mp_add_texture(&scene.material_pool, cmd, texture)
         }
     }
@@ -366,11 +408,17 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
     scene.geometry_pool = gp_new()
     scene.material_pool = mp_new()
 
+    decoded_textures := decode_embedded_textures_parallel(ai_scene)
+    defer {
+        for _, decoded in decoded_textures do stbi.image_free(decoded.pixels)
+        delete(decoded_textures)
+    }
+
     for mesh_index: u32 = 0; mesh_index < ai_scene.mNumMeshes; mesh_index += 1 {
         mesh := ai_scene.mMeshes[mesh_index]
         verts := slice.reinterpret([][3]f32, mesh.mVertices[:mesh.mNumVertices])
         normals := slice.reinterpret([][3]f32, mesh.mNormals[:mesh.mNumVertices])
-        
+
         tangents := make([][3]f32, mesh.mNumVertices)
         defer delete(tangents)
         if mesh.mTangents != nil {
@@ -479,11 +527,11 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
             attenuation_color = attenuation_color,
             attenuation_distance = attenuation_distance,
             double_sided = double_sided,
-            albedo_texture_index = ai_texture_load(cmd, &scene, ai_scene, path, material, .DIFFUSE),
-            emission_texture_index = ai_texture_load(cmd, &scene, ai_scene, path, material, .EMISSIVE),
-            metallic_texture_index = ai_texture_load(cmd, &scene, ai_scene, path, material, .METALNESS),
-            roughness_texture_index = ai_texture_load(cmd, &scene, ai_scene, path, material, .DIFFUSE_ROUGHNESS),
-            normal_texture_index = ai_texture_load(cmd, &scene, ai_scene, path, material, .NORMALS),
+            albedo_texture_index = ai_texture_load(cmd, &scene, ai_scene, decoded_textures, path, material, .DIFFUSE),
+            emission_texture_index = ai_texture_load(cmd, &scene, ai_scene, decoded_textures, path, material, .EMISSIVE),
+            metallic_texture_index = ai_texture_load(cmd, &scene, ai_scene, decoded_textures, path, material, .METALNESS),
+            roughness_texture_index = ai_texture_load(cmd, &scene, ai_scene, decoded_textures, path, material, .DIFFUSE_ROUGHNESS),
+            normal_texture_index = ai_texture_load(cmd, &scene, ai_scene, decoded_textures, path, material, .NORMALS),
             bsdf_type = bsdf_type,
         })
     }
