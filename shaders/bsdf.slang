@@ -329,6 +329,78 @@ public struct LambertianBSDF : BSDF
     }
 }
 
+// === (Energy preserving) Oren-Nayar BSDF ===
+
+// Code adapted from "EON: A Practical Energy-Preserving Rough Diffuse BRDF", Portsmouth et al, 2024.
+// https://arxiv.org/pdf/2410.18026
+public struct OrenNayarBSDF : BSDF
+{
+    public float4 albedo;
+    public float roughness;
+    public float3 normal;
+
+    static const float FON_CONSTANT_1 = 0.5 - 2.0 / (3.0 * PI);
+    static const float FON_CONSTANT_2 = 2.0 / 3.0 - 28.0 / (15.0 * PI);
+
+    // Used to compensate for single-scattering model energy loss
+    float fon_ss_directional_albedo(float mu, float roughness)
+    {
+        float mucomp = 1.0f - mu;
+        const float g1 = 0.0571085289f;
+        const float g2 = 0.491881867f;
+        const float g3 = -0.332181442f;
+        const float g4 = 0.0714429953f;
+        float GoverPi = mucomp * (g1 + mucomp * (g2 + mucomp * (g3 + mucomp * g4)));
+        return (1.0f + roughness * GoverPi) / (1.0f + FON_CONSTANT_1 * roughness);
+    }
+
+    public void evaluate(float3 view_direction, float3 sample_direction,
+        out float4 value_times_cosine, out float4 density)
+    {
+        float mu_i = max(0.0, dot(normal, sample_direction));
+        float mu_o = max(0.0, dot(normal, view_direction));
+        density = mu_i / PI;
+
+        if (roughness <= 0.0f)
+        {
+            value_times_cosine = albedo * rcp(PI) * mu_i;
+            return;
+        }
+
+        float s = dot(sample_direction, view_direction) - mu_i * mu_o;
+        float sovertF = s > 0.0f ? s / max(max(mu_i, mu_o), 1e-7f) : s;
+        float AF = 1.0f / (1.0f + FON_CONSTANT_1 * roughness);
+        float4 f_ss = (albedo * rcp(PI)) * AF * (1.0f + roughness * sovertF);
+        float EFo = fon_ss_directional_albedo(mu_o, roughness);
+        float EFi = fon_ss_directional_albedo(mu_i, roughness);
+        float avgEF = AF * (1.0f + FON_CONSTANT_2 * roughness);
+        float4 rho_ms = (albedo * albedo) * avgEF / (1.0f - albedo * (1.0f - avgEF));
+        const float eps = 1.0e-7f;
+        float4 f_ms = (rho_ms * rcp(PI)) * max(eps, 1.0f - EFo) * max(eps, 1.0f - EFi) / max(eps, 1.0f - avgEF);
+
+        value_times_cosine = (f_ss + f_ms) * mu_i;
+    }
+
+    public void sample(float3 view_direction, float3 geometric_normal, float2 random_sample,
+        out float3 sample_direction, out float4 value_times_cosine, out float4 density, out bool is_delta)
+    {
+        is_delta = false;
+        sample_direction = cosine_hemisphere(random_sample, normal);
+        evaluate(view_direction, sample_direction, value_times_cosine, density);
+
+        if (dot(geometric_normal, sample_direction) <= 0.0)
+        {
+            value_times_cosine = 0.0;
+            density = 0.0;
+        }
+    }
+
+    public bool has_continuous_lobe()
+    {
+        return true;
+    }
+}
+
 // === PBR BSDF ===
 
 // Microfacet Models for Refraction through Rough Surfaces, Walter et al., 2007, (eq. 33)
