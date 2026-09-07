@@ -237,7 +237,7 @@ Decoded_Texture :: struct {
     height: i32,
 }
 
-decode_embedded_textures :: proc(ai_scene: ^ai.Scene) -> map[^ai.Texture]Decoded_Texture {
+decode_embedded_textures_parallel :: proc(ai_scene: ^ai.Scene) -> map[^ai.Texture]Decoded_Texture {
     results := make([]Decoded_Texture, ai_scene.mNumTextures)
     defer delete(results)
 
