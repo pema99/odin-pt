@@ -84,9 +84,11 @@ init :: proc(title: string, width, height: u32, resizable, use_imgui, vsync, val
 	vk.GetPhysicalDeviceMemoryProperties(physical_device, &memory_properties)
 	uniform_alignment = int(props.limits.minUniformBufferOffsetAlignment)
 	timestamp_period = props.limits.timestampPeriod / 1e6
-	props12 := vk.PhysicalDeviceVulkan12Properties{sType = .PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES}
+	as_props := vk.PhysicalDeviceAccelerationStructurePropertiesKHR{sType = .PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR}
+	props12 := vk.PhysicalDeviceVulkan12Properties{sType = .PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES, pNext = &as_props}
 	props2 := vk.PhysicalDeviceProperties2{sType = .PHYSICAL_DEVICE_PROPERTIES_2, pNext = &props12}
 	vk.GetPhysicalDeviceProperties2(physical_device, &props2)
+	scratch_alignment = int(as_props.minAccelerationStructureScratchOffsetAlignment)
 	texture_array_capacity = min(65536, props12.maxPerStageDescriptorUpdateAfterBindSampledImages, props12.maxDescriptorSetUpdateAfterBindSampledImages)
 
 	family_count: u32
@@ -379,6 +381,7 @@ end_frame :: proc(t: Texture) {
 		commandBufferInfoCount   = 1,
 		pCommandBufferInfos      = &cb_info,
 	}, present_cb_fence))
+	device_idle = false
 
 	present_fence_info := vk.SwapchainPresentFenceInfoEXT{sType = .SWAPCHAIN_PRESENT_FENCE_INFO_EXT, swapchainCount = 1, pFences = &present_fence}
 	res = vk.QueuePresentKHR(queue, &vk.PresentInfoKHR {
@@ -450,6 +453,7 @@ readback_buffer :: proc(b: Buffer, $T: typeid, allocator := context.allocator) -
 		commandBufferInfoCount = 1,
 		pCommandBufferInfos    = &cb_info,
 	}, sub.fence))
+	device_idle = false
 	vk_check(vk.WaitForFences(device, 1, &sub.fence, true, max(u64)))
 	vk_check(vk.ResetFences(device, 1, &sub.fence))
 	append(&free_submissions, sub)
@@ -958,6 +962,8 @@ execute_cmd :: proc(cmd: ^Cmd) -> bool {
 			need += align_up(v.data.len, 16)
 		case Cmd_Upload_Texture:
 			need += align_up(v.data.len, 16)
+		case Cmd_Build_As:
+			need += align_up(v.data.len, 16) + align_up(v.index_data.len, 16)
 		case Cmd_Dispatch:
 			for cb in v.shader.cbuffers do need += align_up(cb.size, uniform_alignment)
 		case Cmd_Dispatch_Indirect:
@@ -983,8 +989,8 @@ execute_cmd :: proc(cmd: ^Cmd) -> bool {
 	sub.frame = frame_counter
 	clear(&sub.scopes)
 	open_scopes := make([dynamic]Profile_Scope, virtual.arena_allocator(&scratch))
-	for c in cmd.commands {
-		switch v in c {
+	for command_index := 0; command_index < len(cmd.commands); command_index += 1 {
+		switch v in cmd.commands[command_index] {
 		case Cmd_Begin_Profile:
 			if sub.query_count >= MAX_PROFILE_QUERIES {
 				log.errorf("begin_profile %q: more than %d profiling scopes in one execute_cmd", span_string(cmd, v.name), MAX_PROFILE_QUERIES / 2)
@@ -1051,21 +1057,50 @@ execute_cmd :: proc(cmd: ^Cmd) -> bool {
 			end_label(cb)
 		case Cmd_Build_As:
 			full_barrier(cb)
-			geometry := v.geometry
-			build := vk.AccelerationStructureBuildGeometryInfoKHR {
-				sType                    = .ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
-				type                     = v.type,
-				flags                    = v.flags,
-				mode                     = v.mode,
-				srcAccelerationStructure = v.src,
-				dstAccelerationStructure = v.dst,
-				geometryCount            = 1,
-				pGeometries              = &geometry,
-				scratchData              = {deviceAddress = v.scratch},
+			count := 1
+			scratch_total := align_up(int(v.scratch_size), scratch_alignment)
+			for command_index + count < len(cmd.commands) {
+				next, is_build := cmd.commands[command_index + count].(Cmd_Build_As)
+				if !is_build || next.type != v.type || next.mode == .UPDATE || v.mode == .UPDATE do break
+				next_scratch := align_up(int(next.scratch_size), scratch_alignment)
+				if scratch_total + next_scratch > MAX_BUILD_SCRATCH do break
+				scratch_total += next_scratch
+				count += 1
 			}
-			range := vk.AccelerationStructureBuildRangeInfoKHR{primitiveCount = v.primitive_count}
-			range_ptr: [^]vk.AccelerationStructureBuildRangeInfoKHR = &range
-			vk.CmdBuildAccelerationStructuresKHR(cb, 1, &build, &range_ptr)
+			scratch_buffer := create_buffer_ex(max(scratch_total, 1), {.STORAGE_BUFFER, .SHADER_DEVICE_ADDRESS}, host_visible = false)
+			append(&cmd.garbage, Garbage{buffer = scratch_buffer})
+			builds := make([]vk.AccelerationStructureBuildGeometryInfoKHR, count, virtual.arena_allocator(&scratch))
+			geometries := make([]vk.AccelerationStructureGeometryKHR, count, virtual.arena_allocator(&scratch))
+			ranges := make([]vk.AccelerationStructureBuildRangeInfoKHR, count, virtual.arena_allocator(&scratch))
+			range_ptrs := make([][^]vk.AccelerationStructureBuildRangeInfoKHR, count, virtual.arena_allocator(&scratch))
+			scratch_offset := 0
+			for k in 0 ..< count {
+				b := cmd.commands[command_index + k].(Cmd_Build_As)
+				geometries[k] = b.geometry
+				data_address := sub.staging.address + vk.DeviceAddress(staging_push(sub, span_bytes(cmd, b.data), 16))
+				if b.geometry.geometryType == .TRIANGLES {
+					geometries[k].geometry.triangles.vertexData.deviceAddress = data_address
+					geometries[k].geometry.triangles.indexData.deviceAddress = sub.staging.address + vk.DeviceAddress(staging_push(sub, span_bytes(cmd, b.index_data), 16))
+				} else {
+					geometries[k].geometry.instances.data.deviceAddress = data_address
+				}
+				builds[k] = vk.AccelerationStructureBuildGeometryInfoKHR {
+					sType                    = .ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
+					type                     = b.type,
+					flags                    = b.flags,
+					mode                     = b.mode,
+					srcAccelerationStructure = b.src,
+					dstAccelerationStructure = b.dst,
+					geometryCount            = 1,
+					pGeometries              = &geometries[k],
+					scratchData              = {deviceAddress = scratch_buffer.address + vk.DeviceAddress(scratch_offset)},
+				}
+				scratch_offset += align_up(int(b.scratch_size), scratch_alignment)
+				ranges[k] = vk.AccelerationStructureBuildRangeInfoKHR{primitiveCount = b.primitive_count}
+				range_ptrs[k] = &ranges[k]
+			}
+			vk.CmdBuildAccelerationStructuresKHR(cb, u32(count), raw_data(builds), raw_data(range_ptrs))
+			command_index += count - 1
 		case Cmd_Upload_Buffer:
 			offset := staging_push(sub, span_bytes(cmd, v.data), 16)
 			full_barrier(cb)
@@ -1103,6 +1138,7 @@ execute_cmd :: proc(cmd: ^Cmd) -> bool {
 		commandBufferInfoCount = 1,
 		pCommandBufferInfos    = &cb_info,
 	}, sub.fence))
+	device_idle = false
 	clear(&pending_images)
 	append(&sub.garbage, ..cmd.garbage[:])
 	clear(&cmd.garbage)
@@ -1143,12 +1179,6 @@ create_blas :: proc() -> Blas {
 // Records a build of the BLAS from positions and triangle indices.
 // Reuses the existing BLAS memory when it is big enough.
 build_blas :: proc(cmd: ^Cmd, b: ^Blas, positions: [][3]f32, indices: []u32) {
-	input_usage := vk.BufferUsageFlags{.ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR, .SHADER_DEVICE_ADDRESS}
-	vb := create_host_buffer(slice.to_bytes(positions), input_usage)
-	ib := create_host_buffer(slice.to_bytes(indices), input_usage)
-	append(&cmd.garbage, Garbage{buffer = vb})
-	append(&cmd.garbage, Garbage{buffer = ib})
-
 	geometry := vk.AccelerationStructureGeometryKHR {
 		sType        = .ACCELERATION_STRUCTURE_GEOMETRY_KHR,
 		geometryType = .TRIANGLES,
@@ -1157,13 +1187,13 @@ build_blas :: proc(cmd: ^Cmd, b: ^Blas, positions: [][3]f32, indices: []u32) {
 	geometry.geometry.triangles = {
 		sType        = .ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR,
 		vertexFormat = .R32G32B32_SFLOAT,
-		vertexData   = {deviceAddress = vb.address},
 		vertexStride = size_of([3]f32),
 		maxVertex    = u32(len(positions) - 1),
 		indexType    = .UINT32,
-		indexData    = {deviceAddress = ib.address},
 	}
-	record_as_build(cmd, .BOTTOM_LEVEL, &b.handle, &b.buffer, &geometry, u32(len(indices) / 3), false)
+	data := push_blob(cmd, slice.to_bytes(positions))
+	index_data := push_blob(cmd, slice.to_bytes(indices))
+	record_as_build(cmd, .BOTTOM_LEVEL, &b.handle, &b.buffer, &geometry, data, index_data, u32(len(indices) / 3), false)
 	b.address = vk.GetAccelerationStructureDeviceAddressKHR(device, &vk.AccelerationStructureDeviceAddressInfoKHR {
 		sType                 = .ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
 		accelerationStructure = b.handle,
@@ -1197,20 +1227,15 @@ build_tlas :: proc(cmd: ^Cmd, t: ^Tlas, instances: []Instance, refit := false) {
 		if inst.double_sided do v.flags = vk.GeometryInstanceFlagKHR(1 << u32(vk.GeometryInstanceFlagKHR.TRIANGLE_FACING_CULL_DISABLE))
 		v.accelerationStructureReference = u64(inst.blas.address)
 	}
-	input_usage := vk.BufferUsageFlags{.ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR, .SHADER_DEVICE_ADDRESS}
-	instance_buffer := create_host_buffer(slice.to_bytes(vk_instances), input_usage)
-	append(&cmd.garbage, Garbage{buffer = instance_buffer})
-
 	geometry := vk.AccelerationStructureGeometryKHR {
 		sType        = .ACCELERATION_STRUCTURE_GEOMETRY_KHR,
 		geometryType = .INSTANCES,
 	}
 	geometry.geometry.instances = {
 		sType = .ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR,
-		data  = {deviceAddress = instance_buffer.address},
 	}
 	do_refit := refit && t.handle != 0 && t.instance_count == u32(len(instances))
-	record_as_build(cmd, .TOP_LEVEL, &t.handle, &t.buffer, &geometry, u32(len(instances)), do_refit)
+	record_as_build(cmd, .TOP_LEVEL, &t.handle, &t.buffer, &geometry, push_blob(cmd, slice.to_bytes(vk_instances)), Span{}, u32(len(instances)), do_refit)
 	t.instance_count = u32(len(instances))
 }
 
@@ -1257,6 +1282,8 @@ destroy_tlas :: proc(t: Tlas) {
 @(private) texture_array_capacity: u32
 
 @(private) uniform_alignment: int
+@(private) scratch_alignment: int
+@(private) device_idle: bool
 
 @(private) memory_properties: vk.PhysicalDeviceMemoryProperties
 
@@ -1412,7 +1439,9 @@ vk_check :: proc(res: vk.Result, loc := #caller_location) {
 
 @(private)
 wait_idle :: proc() {
+	if device_idle do return
 	vk_check(vk.DeviceWaitIdle(device))
+	device_idle = true
 }
 
 @(private)
@@ -1504,18 +1533,11 @@ free_buffer :: proc(b: Buffer) {
 }
 
 @(private)
-create_host_buffer :: proc(data: []byte, usage: vk.BufferUsageFlags) -> Buffer {
-	b := create_buffer_ex(len(data), usage, host_visible = true)
-	mem.copy(b.mapped, raw_data(data), len(data))
-	return b
-}
-
-@(private)
 ensure_staging :: proc(f: ^Submission, need: int) {
 	if f.staging.size >= uint(need) do return
 	if f.staging.handle != 0 do free_buffer(f.staging)
 	size := max(need, int(f.staging.size) * 2, 16 * 1024 * 1024)
-	f.staging = create_buffer_ex(size, {.TRANSFER_SRC, .UNIFORM_BUFFER}, host_visible = true)
+	f.staging = create_buffer_ex(size, {.TRANSFER_SRC, .UNIFORM_BUFFER, .ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR, .SHADER_DEVICE_ADDRESS}, host_visible = true)
 }
 
 @(private)
@@ -2073,7 +2095,8 @@ Binding_Key :: struct {
 @(private) Cmd_Copy_Buffer :: struct { src, dst: Buffer }
 
 @(private) Cmd_Copy_Texture :: struct { src, dst: Texture }
-@(private) Cmd_Build_As :: struct { geometry: vk.AccelerationStructureGeometryKHR, dst, src: vk.AccelerationStructureKHR, mode: vk.BuildAccelerationStructureModeKHR, type: vk.AccelerationStructureTypeKHR, flags: vk.BuildAccelerationStructureFlagsKHR, scratch: vk.DeviceAddress, primitive_count: u32 }
+@(private) Cmd_Build_As :: struct { geometry: vk.AccelerationStructureGeometryKHR, data, index_data: Span, dst, src: vk.AccelerationStructureKHR, mode: vk.BuildAccelerationStructureModeKHR, type: vk.AccelerationStructureTypeKHR, flags: vk.BuildAccelerationStructureFlagsKHR, scratch_size: vk.DeviceSize, primitive_count: u32 }
+@(private) MAX_BUILD_SCRATCH :: 256 * 1024 * 1024
 @(private) Cmd_Begin_Profile :: struct { name: Span }
 @(private) Cmd_End_Profile :: struct {}
 
@@ -2232,6 +2255,8 @@ record_as_build :: proc(
 	handle: ^vk.AccelerationStructureKHR,
 	buffer: ^Buffer,
 	geometry: ^vk.AccelerationStructureGeometryKHR,
+	data: Span,
+	index_data: Span,
 	primitive_count: u32,
 	refit: bool,
 ) {
@@ -2261,18 +2286,16 @@ record_as_build :: proc(
 		}, nil, handle))
 	}
 
-	scratch_size := refit ? sizes.updateScratchSize : sizes.buildScratchSize
-	scratch_buffer := create_buffer_ex(int(max(scratch_size, 1)), {.STORAGE_BUFFER, .SHADER_DEVICE_ADDRESS}, host_visible = false)
-	append(&cmd.garbage, Garbage{buffer = scratch_buffer})
-
 	append(&cmd.commands, Cmd_Build_As {
 		geometry        = geometry^,
+		data            = data,
+		index_data      = index_data,
 		dst             = handle^,
 		src             = refit ? handle^ : 0,
 		mode            = mode,
 		type            = type,
 		flags           = flags,
-		scratch         = scratch_buffer.address,
+		scratch_size    = refit ? sizes.updateScratchSize : sizes.buildScratchSize,
 		primitive_count = primitive_count,
 	})
 }
