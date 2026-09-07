@@ -265,7 +265,7 @@ app_load_scene :: proc(state: ^App_State, index: i32) {
     state.pick_object = Pick_Object { instance_id = max(u32) }
     state.pick_material_index = max(u32)
 
-    if camera, has_camera := gltf_read_camera(strings.unsafe_string_to_cstring(scene_path)); has_camera {
+    if camera := state.scene.camera; state.scene.has_camera {
         state.cam.pos = camera.position
         camera_look(&state.cam, camera.forward)
         state.fov = camera.yfov * 180.0 / math.PI

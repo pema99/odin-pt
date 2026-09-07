@@ -6,6 +6,7 @@ import "core:strings"
 import vk "vendor:vulkan"
 import "core:path/filepath"
 import "core:math/linalg"
+import "core:math"
 import cgltf "vendor:cgltf"
 import ai "lib:assimp"
 import stbi "vendor:stb/image"
@@ -194,11 +195,13 @@ Scene :: struct {
     tlas: gpu.Tlas,
     geometry_pool: Geometry_Pool,
     material_pool: Material_Pool,
+    camera: Scene_Camera,
+    has_camera: bool,
 }
 
 scene_load_node :: proc(scene: ^Scene, node: ^ai.Node, transform: ai.Matrix4x4) {
     new_transform := transform
-    ai.MultiplyMatrix4(&new_transform, &node.mTransformation) 
+    ai.MultiplyMatrix4(&new_transform, &node.mTransformation)
 
     for mesh_index: u32 = 0; mesh_index < node.mNumMeshes; mesh_index += 1 {
         blas_index := node.mMeshes[mesh_index]
@@ -358,30 +361,39 @@ gltf_read_extra_data :: proc(path: cstring, allocator := context.allocator) -> (
     return
 }
 
-Gltf_Camera :: struct {
+Scene_Camera :: struct {
     position: [3]f32,
     forward: [3]f32,
     yfov: f32,
 }
 
-gltf_read_camera :: proc(path: cstring) -> (result: Gltf_Camera, ok: bool) {
-    options: cgltf.options
-    data, parse_result := cgltf.parse_file(options, path)
-    if parse_result != .success {
+ai_read_camera :: proc(ai_scene: ^ai.Scene) -> (result: Scene_Camera, ok: bool) {
+    if ai_scene.mNumCameras == 0 {
         return
     }
-    defer cgltf.free(data)
-
-    for i in 0..<len(data.nodes) {
-        node := &data.nodes[i]
-        if node.camera == nil || node.camera.type != .perspective {
+    camera := ai_scene.mCameras[0]
+    root := ai_scene.mRootNode
+    for child_index: u32 = 0; child_index < root.mNumChildren; child_index += 1 {
+        node := root.mChildren[child_index]
+        if cstring(rawptr(&node.mName.data[0])) != cstring(rawptr(&camera.mName.data[0])) {
             continue
         }
-        world: [16]f32
-        cgltf.node_transform_world(node, raw_data(world[:]))
-        result.position = {world[12], world[13], world[14]}
-        result.forward = linalg.normalize([3]f32{-world[8], -world[9], -world[10]})
-        result.yfov = node.camera.data.perspective.yfov
+        m := root.mTransformation
+        ai.MultiplyMatrix4(&m, &node.mTransformation)
+        p := camera.mPosition
+        l := camera.mLookAt
+        result.position = {
+            m.a1 * p.x + m.a2 * p.y + m.a3 * p.z + m.a4,
+            m.b1 * p.x + m.b2 * p.y + m.b3 * p.z + m.b4,
+            m.c1 * p.x + m.c2 * p.y + m.c3 * p.z + m.c4,
+        }
+        result.forward = linalg.normalize([3]f32{
+            m.a1 * l.x + m.a2 * l.y + m.a3 * l.z,
+            m.b1 * l.x + m.b2 * l.y + m.b3 * l.z,
+            m.c1 * l.x + m.c2 * l.y + m.c3 * l.z,
+        })
+        aspect := camera.mAspect == 0 ? 1 : camera.mAspect
+        result.yfov = 2 * math.atan(math.tan(camera.mHorizontalFOV / 2) / aspect)
         return result, true
     }
     return
@@ -535,6 +547,7 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
     transform: ai.Matrix4x4
     ai.IdentityMatrix4(&transform)
     scene_load_node(&scene, ai_scene.mRootNode, transform)
+    scene.camera, scene.has_camera = ai_read_camera(ai_scene)
 
     gpu.build_tlas(cmd, &scene.tlas, scene.instances[:])
 
