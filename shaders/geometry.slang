@@ -86,7 +86,7 @@ public float3 apply_normal_bias(float3 position, float3 normal)
 {
     float3 a = abs(position);
     float distance_to_origin = max(a.x, max(a.y, a.z));
-    float offset = (distance_to_origin < 1.0 / 32.0) ?
+    float offset = (distance_to_origin < 1.0 / 2.0) ?
         1.192092896e-07 * 64.0 :
         1.192092896e-07 * 64.0 * distance_to_origin;
     return position + offset * normal;
