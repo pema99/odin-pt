@@ -76,15 +76,11 @@ gp_add_mesh :: proc(
         material_index = material_index
     }
     append(&pool.mesh_to_pool, info)
-    for i in 0..<len(indices) {
-        gpu_list_add(&pool.indices, indices[i])
-    }
-    for i in 0..<len(vertices) {
-        gpu_list_add(&pool.vertices, vertices[i])
-        gpu_list_add(&pool.normals, normals[i])
-        gpu_list_add(&pool.tangents, tangents[i])
-        gpu_list_add(&pool.uvs, uvs[i])
-    }
+    gpu_list_add_range(&pool.indices, indices)
+    gpu_list_add_range(&pool.vertices, vertices)
+    gpu_list_add_range(&pool.normals, normals)
+    gpu_list_add_range(&pool.tangents, tangents)
+    gpu_list_add_range(&pool.uvs, uvs)
     return u32(len(pool.mesh_to_pool)) - 1
 }
 

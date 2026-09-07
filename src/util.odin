@@ -34,6 +34,26 @@ gpu_list_add :: proc(list: ^GPU_List($T), item: T) {
     list.length += 1
 }
 
+gpu_list_add_range :: proc(list: ^GPU_List($T), items: []T) {
+    needed := list.length + u32(len(items))
+    capacity := u32(len(list.array))
+
+    if needed > capacity {
+        for u32(capacity) < needed {
+            capacity *= 2
+        }
+        new_array := make([]T, capacity)
+        copy(new_array, list.array[:list.length])
+        delete(list.array)
+        list.array = new_array
+        gpu.destroy_buffer(list.buffer)
+        list.buffer = gpu.create_buffer(uint(capacity * size_of(T)), writable = true)
+    }
+
+    copy(list.array[list.length:], items)
+    list.length = needed
+}
+
 gpu_list_remove :: proc(list: ^GPU_List($T), index: u32) {
     // TODO
 }
