@@ -902,13 +902,22 @@ upload_buffer :: proc(cmd: ^Cmd, dst: Buffer, data: []$T) -> bool {
 		log.errorf("upload_buffer: %d bytes into a %d byte buffer", len(bytes), dst.size)
 		return false
 	}
-	append(&cmd.commands, Cmd_Upload_Buffer{dst, push_blob(cmd, bytes)})
+	if len(bytes) >= UPLOAD_DIRECT_THRESHOLD {
+		append(&cmd.commands, Cmd_Upload_Buffer{dst = dst, src = push_upload(cmd, bytes)})
+	} else {
+		append(&cmd.commands, Cmd_Upload_Buffer{dst = dst, data = push_blob(cmd, bytes)})
+	}
 	return true
 }
 
 // Copies tightly packed pixels into a texture. Must be exactly width*height texels.
 upload_texture :: proc(cmd: ^Cmd, dst: Texture, pixels: []$T) {
-	append(&cmd.commands, Cmd_Upload_Texture{dst, push_blob(cmd, slice.to_bytes(pixels))})
+	bytes := slice.to_bytes(pixels)
+	if len(bytes) >= UPLOAD_DIRECT_THRESHOLD {
+		append(&cmd.commands, Cmd_Upload_Texture{dst = dst, src = push_upload(cmd, bytes)})
+	} else {
+		append(&cmd.commands, Cmd_Upload_Texture{dst = dst, data = push_blob(cmd, bytes)})
+	}
 }
 
 // Copies a whole buffer into another of the same size.
@@ -962,8 +971,6 @@ execute_cmd :: proc(cmd: ^Cmd) -> bool {
 			need += align_up(v.data.len, 16)
 		case Cmd_Upload_Texture:
 			need += align_up(v.data.len, 16)
-		case Cmd_Build_As:
-			need += align_up(v.data.len, 16) + align_up(v.index_data.len, 16)
 		case Cmd_Dispatch:
 			for cb in v.shader.cbuffers do need += align_up(cb.size, uniform_alignment)
 		case Cmd_Dispatch_Indirect:
@@ -1059,16 +1066,21 @@ execute_cmd :: proc(cmd: ^Cmd) -> bool {
 			full_barrier(cb)
 			count := 1
 			scratch_total := align_up(int(v.scratch_size), scratch_alignment)
+			input_total := align_up(v.data.len, 16) + align_up(v.index_data.len, 16)
 			for command_index + count < len(cmd.commands) {
 				next, is_build := cmd.commands[command_index + count].(Cmd_Build_As)
 				if !is_build || next.type != v.type || next.mode == .UPDATE || v.mode == .UPDATE do break
 				next_scratch := align_up(int(next.scratch_size), scratch_alignment)
 				if scratch_total + next_scratch > MAX_BUILD_SCRATCH do break
 				scratch_total += next_scratch
+				input_total += align_up(next.data.len, 16) + align_up(next.index_data.len, 16)
 				count += 1
 			}
 			scratch_buffer := create_buffer_ex(max(scratch_total, 1), {.STORAGE_BUFFER, .SHADER_DEVICE_ADDRESS}, host_visible = false)
 			append(&cmd.garbage, Garbage{buffer = scratch_buffer})
+			input_buffer := create_buffer_ex(max(input_total, 1), {.ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR, .SHADER_DEVICE_ADDRESS}, host_visible = true)
+			append(&cmd.garbage, Garbage{buffer = input_buffer})
+			input_offset := 0
 			builds := make([]vk.AccelerationStructureBuildGeometryInfoKHR, count, virtual.arena_allocator(&scratch))
 			geometries := make([]vk.AccelerationStructureGeometryKHR, count, virtual.arena_allocator(&scratch))
 			ranges := make([]vk.AccelerationStructureBuildRangeInfoKHR, count, virtual.arena_allocator(&scratch))
@@ -1077,10 +1089,14 @@ execute_cmd :: proc(cmd: ^Cmd) -> bool {
 			for k in 0 ..< count {
 				b := cmd.commands[command_index + k].(Cmd_Build_As)
 				geometries[k] = b.geometry
-				data_address := sub.staging.address + vk.DeviceAddress(staging_push(sub, span_bytes(cmd, b.data), 16))
+				data_address := input_buffer.address + vk.DeviceAddress(input_offset)
+				mem.copy(rawptr(uintptr(input_buffer.mapped) + uintptr(input_offset)), raw_data(span_bytes(cmd, b.data)), b.data.len)
+				input_offset += align_up(b.data.len, 16)
 				if b.geometry.geometryType == .TRIANGLES {
 					geometries[k].geometry.triangles.vertexData.deviceAddress = data_address
-					geometries[k].geometry.triangles.indexData.deviceAddress = sub.staging.address + vk.DeviceAddress(staging_push(sub, span_bytes(cmd, b.index_data), 16))
+					geometries[k].geometry.triangles.indexData.deviceAddress = input_buffer.address + vk.DeviceAddress(input_offset)
+					mem.copy(rawptr(uintptr(input_buffer.mapped) + uintptr(input_offset)), raw_data(span_bytes(cmd, b.index_data)), b.index_data.len)
+					input_offset += align_up(b.index_data.len, 16)
 				} else {
 					geometries[k].geometry.instances.data.deviceAddress = data_address
 				}
@@ -1102,19 +1118,31 @@ execute_cmd :: proc(cmd: ^Cmd) -> bool {
 			vk.CmdBuildAccelerationStructuresKHR(cb, u32(count), raw_data(builds), raw_data(range_ptrs))
 			command_index += count - 1
 		case Cmd_Upload_Buffer:
-			offset := staging_push(sub, span_bytes(cmd, v.data), 16)
+			src := v.src
+			offset := 0
+			size := int(v.src.size)
+			if src.handle == 0 {
+				src = sub.staging
+				offset = staging_push(sub, span_bytes(cmd, v.data), 16)
+				size = v.data.len
+			}
 			full_barrier(cb)
-			region := vk.BufferCopy{srcOffset = vk.DeviceSize(offset), size = vk.DeviceSize(v.data.len)}
-			vk.CmdCopyBuffer(cb, sub.staging.handle, v.dst.handle, 1, &region)
+			region := vk.BufferCopy{srcOffset = vk.DeviceSize(offset), size = vk.DeviceSize(size)}
+			vk.CmdCopyBuffer(cb, src.handle, v.dst.handle, 1, &region)
 		case Cmd_Upload_Texture:
-			offset := staging_push(sub, span_bytes(cmd, v.data), 16)
+			src := v.src
+			offset := 0
+			if src.handle == 0 {
+				src = sub.staging
+				offset = staging_push(sub, span_bytes(cmd, v.data), 16)
+			}
 			full_barrier(cb)
 			region := vk.BufferImageCopy {
 				bufferOffset     = vk.DeviceSize(offset),
 				imageSubresource = {aspectMask = {.COLOR}, layerCount = 1},
 				imageExtent      = {u32(v.dst.width), u32(v.dst.height), 1},
 			}
-			vk.CmdCopyBufferToImage(cb, sub.staging.handle, v.dst.image, .GENERAL, 1, &region)
+			vk.CmdCopyBufferToImage(cb, src.handle, v.dst.image, .GENERAL, 1, &region)
 		case Cmd_Copy_Buffer:
 			full_barrier(cb)
 			region := vk.BufferCopy{size = vk.DeviceSize(v.src.size)}
@@ -1537,7 +1565,7 @@ ensure_staging :: proc(f: ^Submission, need: int) {
 	if f.staging.size >= uint(need) do return
 	if f.staging.handle != 0 do free_buffer(f.staging)
 	size := max(need, int(f.staging.size) * 2, 16 * 1024 * 1024)
-	f.staging = create_buffer_ex(size, {.TRANSFER_SRC, .UNIFORM_BUFFER, .ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR, .SHADER_DEVICE_ADDRESS}, host_visible = true)
+	f.staging = create_buffer_ex(size, {.TRANSFER_SRC, .UNIFORM_BUFFER}, host_visible = true)
 }
 
 @(private)
@@ -2088,9 +2116,10 @@ Binding_Key :: struct {
 
 @(private) Cmd_Dispatch_Indirect :: struct { shader: Shader, kernel: int, buffer: Buffer, offset: uint }
 
-@(private) Cmd_Upload_Buffer :: struct { dst: Buffer, data: Span }
+@(private) Cmd_Upload_Buffer :: struct { dst: Buffer, data: Span, src: Buffer }
 
-@(private) Cmd_Upload_Texture :: struct { dst: Texture, data: Span }
+@(private) Cmd_Upload_Texture :: struct { dst: Texture, data: Span, src: Buffer }
+@(private) UPLOAD_DIRECT_THRESHOLD :: 1024 * 1024
 
 @(private) Cmd_Copy_Buffer :: struct { src, dst: Buffer }
 
@@ -2125,6 +2154,14 @@ push_blob :: proc(cmd: ^Cmd, data: []byte) -> Span {
 	s := Span{len(cmd.blob), len(data)}
 	append(&cmd.blob, ..data)
 	return s
+}
+
+@(private)
+push_upload :: proc(cmd: ^Cmd, data: []byte) -> Buffer {
+	b := create_buffer_ex(len(data), {.TRANSFER_SRC}, host_visible = true)
+	mem.copy(b.mapped, raw_data(data), len(data))
+	append(&cmd.garbage, Garbage{buffer = b})
+	return b
 }
 
 @(private)
