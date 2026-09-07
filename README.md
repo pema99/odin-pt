@@ -1,5 +1,8 @@
 it's a path tracer, wew
 
+<img width="1442" height="862" alt="image" src="https://github.com/user-attachments/assets/a93e966d-217f-495d-a44a-4a7de0dc268e" />
+
+
 <img width="1435" height="997" alt="odin-pt_ZX3WcEDyKW" src="https://github.com/user-attachments/assets/d91f05a8-e672-487e-8004-95f37eed2868" />
 
 <img width="1647" height="969" alt="odin-pt_yWotZ8WdoX" src="https://github.com/user-attachments/assets/c1c34e80-4541-4b3d-a8ee-8a6d5f0eeea9" />
