@@ -110,6 +110,7 @@ Light_BVH :: struct {
 	lights: GPU_List(Emissive_Triangle),
 	nodes: GPU_List(Light_BVH_Node),
 	light_to_bit_trail: GPU_List(u32),
+	instance_to_light: GPU_List(u32),
 }
 
 Indexed_Light :: struct {
@@ -234,10 +235,17 @@ light_bvh_new :: proc(gp: ^Geometry_Pool, mp: ^Material_Pool) -> Light_BVH {
 	lights := gpu_list_new(Emissive_Triangle)
 	nodes := gpu_list_new(Light_BVH_Node)
 	light_to_bit_trail := gpu_list_new(u32)
+	instance_to_light := gpu_list_new(u32)
+
+	no_lights := make([]u32, gp.instance_to_pool.length)
+	defer delete(no_lights)
+	for i in 0..<len(no_lights) do no_lights[i] = max(u32)
+	gpu_list_add_range(&instance_to_light, no_lights)
 
 	// add emissive triangles
 	for instance_index in gp.emissive_instance_indices.array[:gp.emissive_instance_indices.length] {
 		info := gp.instance_to_pool.array[instance_index]
+		instance_to_light.array[instance_index] = lights.length
 		triangles := make([]Emissive_Triangle, info.index_count / 3)
 		defer delete(triangles)
 		for triangle_index := u32(0); triangle_index < info.index_count / 3; triangle_index += 1 {
@@ -308,6 +316,7 @@ light_bvh_new :: proc(gp: ^Geometry_Pool, mp: ^Material_Pool) -> Light_BVH {
 		lights = lights,
 		nodes = nodes,
 		light_to_bit_trail = light_to_bit_trail,
+		instance_to_light = instance_to_light,
 	}
 	if lights.length > 0 {
 		light_bvh_build(&bvh, build_lights, 0, 0, int(lights.length), 0)
@@ -319,10 +328,12 @@ light_bvh_commit :: proc(bvh: ^Light_BVH, cmd: ^gpu.Cmd) {
 	gpu_list_commit(&bvh.lights, cmd)
 	gpu_list_commit(&bvh.nodes, cmd)
 	gpu_list_commit(&bvh.light_to_bit_trail, cmd)
+	gpu_list_commit(&bvh.instance_to_light, cmd)
 }
 
 light_bvh_delete :: proc(bvh: ^Light_BVH) {
 	gpu_list_delete(&bvh.lights)
 	gpu_list_delete(&bvh.nodes)
 	gpu_list_delete(&bvh.light_to_bit_trail)
+	gpu_list_delete(&bvh.instance_to_light)
 }
