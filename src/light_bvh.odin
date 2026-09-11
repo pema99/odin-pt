@@ -14,8 +14,7 @@ Light_Bounds :: struct {
 }
 
 // https://pbr-book.org/4ed/Geometry_and_Transformations/Spherical_Geometry
-union_cone :: proc(direction_a: [3]f32, cos_cone_angle_a: f32, direction_b: [3]f32, cos_cone_angle_b: f32) -> (direction: [3]f32, cos_cone_angle: f32)
-{
+union_cone :: proc(direction_a: [3]f32, cos_cone_angle_a: f32, direction_b: [3]f32, cos_cone_angle_b: f32) -> (direction: [3]f32, cos_cone_angle: f32) {
 	// One cone empty
 	if math.is_inf(cos_cone_angle_a) {
 		return direction_b, cos_cone_angle_b
