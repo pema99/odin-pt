@@ -2,6 +2,10 @@ package main
 
 import "gpu"
 
+import "core:math"
+import "core:math/linalg"
+
+// === GPU list ===
 GPU_List :: struct($T: typeid) {
     array: []T,
     buffer: gpu.Buffer,
@@ -60,4 +64,43 @@ gpu_list_remove :: proc(list: ^GPU_List($T), index: u32) {
 
 gpu_list_commit :: proc(list: ^GPU_List($T), cmd: ^gpu.Cmd) {
     gpu.upload_buffer(cmd, list.buffer, list.array[:list.length])
+}
+
+// === AABB ===
+AABB :: struct {
+	min, max: [3]f32
+}
+
+aabb_empty :: proc() -> AABB {
+	return {min = math.INF_F32, max = math.NEG_INF_F32}
+}
+
+aabb_union :: proc(a, b: AABB) -> AABB {
+	return {linalg.min(a.min, b.min), linalg.max(a.max, b.max)}
+}
+
+aabb_encapsulate:: proc(a: AABB, p: [3]f32) -> AABB {
+	return {linalg.min(a.min, p), linalg.max(a.max, p)}
+}
+
+aabb_centroid :: proc(b: AABB) -> [3]f32 {
+	return (b.min + b.max) * 0.5
+}
+
+// position of p within the bounds in [0; 1]
+aabb_offset :: proc(b: AABB, p: [3]f32) -> [3]f32 {
+	o := p - b.min
+	for i in 0..<3 {
+		if b.max[i] > b.min[i] do o[i] /= b.max[i] - b.min[i]
+	}
+	return o
+}
+
+aabb_diagonal :: proc(b: AABB) -> [3]f32 {
+	return b.max - b.min
+}
+
+aabb_surface_area :: proc(b: AABB) -> f32 {
+	d := b.max - b.min
+	return 2 * (d.x*d.y + d.x*d.z + d.y*d.z)
 }

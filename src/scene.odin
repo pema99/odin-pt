@@ -195,6 +195,7 @@ Scene :: struct {
     tlas: gpu.Tlas,
     geometry_pool: Geometry_Pool,
     material_pool: Material_Pool,
+    light_bvh: Light_BVH,
     camera: Scene_Camera,
     has_camera: bool,
 }
@@ -549,6 +550,9 @@ scene_load :: proc(path: cstring, cmd: ^gpu.Cmd) -> (s: Scene, ok: bool) #option
     scene_load_node(&scene, ai_scene.mRootNode, transform)
     scene.camera, scene.has_camera = ai_read_camera(ai_scene)
 
+    scene.light_bvh = light_bvh_new(&scene.geometry_pool, &scene.material_pool)
+    light_bvh_commit(&scene.light_bvh, cmd)
+
     gpu.build_tlas(cmd, &scene.tlas, scene.instances[:])
 
     gp_commit(&scene.geometry_pool, cmd)
@@ -566,5 +570,6 @@ scene_delete :: proc(scene: ^Scene)  {
     delete(scene.instances)
     gp_delete(&scene.geometry_pool)
     mp_delete(&scene.material_pool)
+    light_bvh_delete(&scene.light_bvh)
     scene^ = {}
 }
