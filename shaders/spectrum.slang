@@ -66,7 +66,7 @@ public float3 resolve_spectrum<let MODE : SpectralMode>(
     // We can pull p(λ_s) out of each p_i:
     //   Σ_s f_s / (p(λ_s) Σ_i p(X | λ_i))
     // And rewrite a bit:
-    //   Σ_s f_s / ((1/VISIBLE_RANGE) Σ_i p(X | λ_i)) = 
+    //   Σ_s f_s / ((1/VISIBLE_RANGE) Σ_i p(X | λ_i)) =
     //   VISIBLE_RANGE * Σ_s f_s / Σ_i p(X | λ_i)
     // This function receives:
     //   contribution_over_hero_density_s = f_s / p(X | λ_0)    (call it c_s)
@@ -78,7 +78,7 @@ public float3 resolve_spectrum<let MODE : SpectralMode>(
 
     // weighted = c_s / (Σ_i d_i)
     float4 weighted = contribution_over_hero_density / dot(density_over_hero_density, 1.0);
-    // weighted_xyz = Σ_s cie(λ_s) weighted 
+    // weighted_xyz = Σ_s cie(λ_s) weighted
     // (conversion does the sum, color matching omitted in derivation for brevity)
     float3 weighted_xyz = spectrum_to_xyz(weighted, basis);
     // divide by p(λ_s)
@@ -88,18 +88,20 @@ public float3 resolve_spectrum<let MODE : SpectralMode>(
 }
 
 // See tools/fit_rgb_to_spectrum_upsample.py
+Texture2D<float4> rgb_to_spectrum_lut;
+SamplerState spectrum_sampler;
+
 public SpectrumBasis get_spectrum_basis(float4 wavelengths)
 {
     float4 normalize_wavelengths = (wavelengths - MIN_VISIBLE_WAVELENGTH) / VISIBLE_WAVELENGTH_RANGE;
-    float4 position = normalize_wavelengths * (RGB_TO_SPECTRUM_LUT_SIZE - 1);
-    int4 index = min(int4(position), RGB_TO_SPECTRUM_LUT_SIZE - 2);
-    float4 fraction = position - float4(index);
+    float4 position_pixel = normalize_wavelengths * (RGB_TO_SPECTRUM_LUT_SIZE - 1);
+    float4 position_u = (position_pixel + 0.5) / RGB_TO_SPECTRUM_LUT_SIZE;
     SpectrumBasis basis;
     basis.wavelengths = wavelengths;
-    basis.primaries[0] = lerp(RGB_TO_SPECTRUM_LUT[index.x], RGB_TO_SPECTRUM_LUT[index.x + 1], fraction.x);
-    basis.primaries[1] = lerp(RGB_TO_SPECTRUM_LUT[index.y], RGB_TO_SPECTRUM_LUT[index.y + 1], fraction.y);
-    basis.primaries[2] = lerp(RGB_TO_SPECTRUM_LUT[index.z], RGB_TO_SPECTRUM_LUT[index.z + 1], fraction.z);
-    basis.primaries[3] = lerp(RGB_TO_SPECTRUM_LUT[index.w], RGB_TO_SPECTRUM_LUT[index.w + 1], fraction.w);
+    basis.primaries[0] = rgb_to_spectrum_lut.SampleLevel(spectrum_sampler, float2(position_u.x, 0.5), 0).rgb;
+    basis.primaries[1] = rgb_to_spectrum_lut.SampleLevel(spectrum_sampler, float2(position_u.y, 0.5), 0).rgb;
+    basis.primaries[2] = rgb_to_spectrum_lut.SampleLevel(spectrum_sampler, float2(position_u.z, 0.5), 0).rgb;
+    basis.primaries[3] = rgb_to_spectrum_lut.SampleLevel(spectrum_sampler, float2(position_u.w, 0.5), 0).rgb;
     cie_matching(wavelengths, basis.xyz[0], basis.xyz[1], basis.xyz[2], basis.xyz[3]);
     return basis;
 }
@@ -228,46 +230,3 @@ float3 spectrum_to_xyz(float4 values, SpectrumBasis basis)
 
 // tools/fit_rgb_to_spectrum_upsample.py
 static const int RGB_TO_SPECTRUM_LUT_SIZE = 81;
-static const float3 RGB_TO_SPECTRUM_LUT[RGB_TO_SPECTRUM_LUT_SIZE] = {
-    float3(0.000000, 0.000000, 1.000000), float3(0.000000, 0.000000, 1.000000),
-    float3(0.000000, 0.027893, 0.972107), float3(0.000000, 0.110509, 0.889491),
-    float3(0.156819, 0.036305, 0.806875), float3(0.275741, 0.000000, 0.724259),
-    float3(0.358357, 0.000000, 0.641643), float3(0.275741, 0.000000, 0.724259),
-    float3(0.193125, 0.000000, 0.806875), float3(0.110509, 0.000000, 0.889491),
-    float3(0.027893, 0.000000, 0.972107), float3(0.000000, 0.000000, 1.000000),
-    float3(0.000000, 0.000000, 1.000000), float3(0.000000, 0.000000, 1.000000),
-    float3(0.000000, 0.000000, 1.000000), float3(0.000000, 0.000000, 1.000000),
-    float3(0.000000, 0.002307, 0.997693), float3(0.000000, 0.084923, 0.915077),
-    float3(0.000000, 0.167538, 0.832462), float3(0.000000, 0.250154, 0.749846),
-    float3(0.000000, 0.332770, 0.667230), float3(0.000000, 0.415386, 0.584614),
-    float3(0.000000, 0.498002, 0.501998), float3(0.000000, 0.580618, 0.419382),
-    float3(0.000000, 0.663234, 0.336766), float3(0.000000, 0.745850, 0.254150),
-    float3(0.000000, 0.828466, 0.171534), float3(0.000000, 0.911082, 0.088918),
-    float3(0.000000, 0.993698, 0.006302), float3(0.000000, 1.000000, 0.000000),
-    float3(0.000000, 1.000000, 0.000000), float3(0.000000, 1.000000, 0.000000),
-    float3(0.000000, 1.000000, 0.000000), float3(0.000000, 1.000000, 0.000000),
-    float3(0.000000, 1.000000, 0.000000), float3(0.000000, 1.000000, 0.000000),
-    float3(0.000000, 1.000000, 0.000000), float3(0.000000, 1.000000, 0.000000),
-    float3(0.000000, 0.997512, 0.002488), float3(0.073219, 0.855040, 0.071741),
-    float3(0.230039, 0.712569, 0.057392), float3(0.386858, 0.570098, 0.043044),
-    float3(0.543677, 0.427626, 0.028696), float3(0.700497, 0.285155, 0.014348),
-    float3(0.857316, 0.142684, 0.000000), float3(0.999787, 0.000213, 0.000000),
-    float3(1.000000, 0.000000, 0.000000), float3(1.000000, 0.000000, 0.000000),
-    float3(1.000000, 0.000000, 0.000000), float3(1.000000, 0.000000, 0.000000),
-    float3(1.000000, 0.000000, 0.000000), float3(1.000000, 0.000000, 0.000000),
-    float3(1.000000, 0.000000, 0.000000), float3(1.000000, 0.000000, 0.000000),
-    float3(1.000000, 0.000000, 0.000000), float3(1.000000, 0.000000, 0.000000),
-    float3(1.000000, 0.000000, 0.000000), float3(1.000000, 0.000000, 0.000000),
-    float3(1.000000, 0.000000, 0.000000), float3(1.000000, 0.000000, 0.000000),
-    float3(1.000000, 0.000000, 0.000000), float3(1.000000, 0.000000, 0.000000),
-    float3(1.000000, 0.000000, 0.000000), float3(0.857529, 0.142471, 0.000000),
-    float3(0.700709, 0.284943, 0.014348), float3(0.543890, 0.427414, 0.028696),
-    float3(0.387071, 0.569885, 0.043044), float3(0.230251, 0.712356, 0.057392),
-    float3(0.073432, 0.854827, 0.071741), float3(0.000000, 0.997299, 0.002701),
-    float3(0.000000, 1.000000, 0.000000), float3(0.000000, 1.000000, 0.000000),
-    float3(0.000000, 1.000000, 0.000000), float3(0.000000, 1.000000, 0.000000),
-    float3(0.000000, 1.000000, 0.000000), float3(0.000000, 1.000000, 0.000000),
-    float3(0.000000, 1.000000, 0.000000), float3(0.000000, 1.000000, 0.000000),
-    float3(0.000000, 1.000000, 0.000000), float3(0.000000, 1.000000, 0.000000),
-    float3(0.000000, 1.000000, 0.000000),
-};

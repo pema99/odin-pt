@@ -100,6 +100,7 @@ App_State :: struct {
     trace: gpu.Shader,
     postfx: gpu.Shader,
     picking: gpu.Shader,
+    spectrum_lut: gpu.Texture,
     output: gpu.Texture,
     output_postfx: gpu.Texture,
     picking_buffer: gpu.Buffer,
@@ -211,6 +212,7 @@ app_init :: proc() -> App_State {
     }
     state.picking = picking
 
+    state.spectrum_lut = get_spectrum_lut()
     state.output = gpu.create_texture(WIDTH, HEIGHT, .R32G32B32A32_SFLOAT, writable = true)
     state.output_postfx = gpu.create_texture(WIDTH, HEIGHT, .R32G32B32A32_SFLOAT, writable = true)
     state.postfx_kernel_size = gpu.get_kernel_size(state.postfx, "main")
@@ -227,6 +229,7 @@ app_init :: proc() -> App_State {
 
 app_delete :: proc(state: ^App_State) {
     scene_delete(&state.scene)
+    gpu.destroy_texture(state.spectrum_lut)
     gpu.destroy_texture(state.output)
     gpu.destroy_texture(state.output_postfx)
     gpu.destroy_buffer(state.picking_buffer)
@@ -345,6 +348,9 @@ app_do_frame :: proc(state: ^App_State) {
         }
 
         // Main RT pass
+        if state.spectral_mode == .Spectral {
+            gpu.set_texture(cmd, trace, trace_kernel, "rgb_to_spectrum_lut", state.spectrum_lut)
+        }
         gpu.set_cbuffer(cmd, trace, trace_kernel, "Camera", &state.cam)
         gpu.set_uniform(cmd, trace, trace_kernel, "screen_size", [2]u32{state.output.width, state.output.height})
         gpu.set_uniform(cmd, trace, trace_kernel, "frame", state.frame)

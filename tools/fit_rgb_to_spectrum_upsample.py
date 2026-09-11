@@ -72,12 +72,26 @@ basis = np.round(basis, 6)
 overshoot = np.maximum(np.round(basis.sum(1) - 1.0, 6), 0.0)
 basis[np.arange(n), basis.argmax(1)] -= overshoot
 
-print("public static const int RGB_TO_SPECTRUM_LUT_SIZE = %d;" % n)
+print("package main")
 print("")
-print("public static const float3 RGB_TO_SPECTRUM_LUT[RGB_TO_SPECTRUM_LUT_SIZE] = {")
+print("import \"gpu\"")
+print("")
+print("SPECTRUM_LUT_SIZE :: %d" % n)
+print("")
+print("get_spectrum_lut :: proc() -> gpu.Texture {")
+print("    texture := gpu.create_texture(SPECTRUM_LUT_SIZE, 1, .R32G32B32A32_SFLOAT)")
+print("    cmd := gpu.create_cmd()")
+print("    defer gpu.destroy_cmd(cmd)")
+print("    gpu.upload_texture(cmd, texture, SPECTRUM_LUT[:])")
+print("    gpu.execute_cmd(cmd)")
+print("    return texture")
+print("}")
+print("")
+print("@(rodata)")
+print("SPECTRUM_LUT := [SPECTRUM_LUT_SIZE][4]f32 {")
 for i in range(0, n, 2):
-    print("    " + " ".join("float3(%.6f, %.6f, %.6f)," % (r, g, b) for r, g, b in basis[i:i+2]))
-print("};")
+    print("    " + " ".join("{%.6f, %.6f, %.6f, 0.000000}," % (r, g, b) for r, g, b in basis[i:i+2]))
+print("}")
 
 
 # Cheap gaussian apprxoimation
