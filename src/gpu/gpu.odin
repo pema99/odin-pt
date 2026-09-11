@@ -808,15 +808,15 @@ set_cbuffer :: proc(cmd: ^Cmd, s: Shader, kernel, name: string, data: ^$T) -> bo
 
 // Dispatches a kernel with this many thread groups.
 // On invalid use, prints the error and returns false.
-dispatch :: proc(cmd: ^Cmd, s: Shader, kernel: string, groups_x: u32, groups_y: u32 = 1, groups_z: u32 = 1) -> bool {
+dispatch :: proc(cmd: ^Cmd, s: Shader, kernel: string, groups_x: u32, groups_y: u32 = 1, groups_z: u32 = 1, barrier := true) -> bool {
 	kernel_index := find_kernel(s, kernel) or_return
-	append(&cmd.commands, Cmd_Dispatch{s, kernel_index, groups_x, groups_y, groups_z})
+	append(&cmd.commands, Cmd_Dispatch{s, kernel_index, groups_x, groups_y, groups_z, barrier})
 	return true
 }
 
 // Dispatches a kernel with thread group counts read on the GPU from a buffer at a byte offset: three consecutive u32s (x, y, z).
 // On invalid use, prints the error and returns false.
-dispatch_indirect :: proc(cmd: ^Cmd, s: Shader, kernel: string, b: Buffer, offset: uint = 0) -> bool {
+dispatch_indirect :: proc(cmd: ^Cmd, s: Shader, kernel: string, b: Buffer, offset: uint = 0, barrier := true) -> bool {
 	kernel_index := find_kernel(s, kernel) or_return
 	if offset < 0 || offset % 4 != 0 {
 		log.errorf("dispatch_indirect %s.%s: offset %d must be a non-negative multiple of 4", s.name, kernel, offset)
@@ -826,7 +826,7 @@ dispatch_indirect :: proc(cmd: ^Cmd, s: Shader, kernel: string, b: Buffer, offse
 		log.errorf("dispatch_indirect %s.%s: offset %d leaves no room for 3 u32s in a %d byte buffer", s.name, kernel, offset, b.size)
 		return false
 	}
-	append(&cmd.commands, Cmd_Dispatch_Indirect{s, kernel_index, b, offset})
+	append(&cmd.commands, Cmd_Dispatch_Indirect{s, kernel_index, b, offset, barrier})
 	return true
 }
 
@@ -1045,6 +1045,7 @@ execute_cmd :: proc(cmd: ^Cmd) -> bool {
 			}
 			vk.UpdateDescriptorSets(device, 1, &write, 0, nil)
 		case Cmd_Dispatch:
+			if v.barrier do full_barrier(cb)
 			if !record_bindings(cmd, sub, v.shader, v.kernel) {
 				vk_check(vk.ResetCommandBuffer(cb, {}))
 				append(&free_submissions, sub)
@@ -1054,6 +1055,7 @@ execute_cmd :: proc(cmd: ^Cmd) -> bool {
 			vk.CmdDispatch(cb, v.x, v.y, v.z)
 			end_label(cb)
 		case Cmd_Dispatch_Indirect:
+			if v.barrier do full_barrier(cb)
 			if !record_bindings(cmd, sub, v.shader, v.kernel) {
 				vk_check(vk.ResetCommandBuffer(cb, {}))
 				append(&free_submissions, sub)
@@ -2112,9 +2114,9 @@ Binding_Key :: struct {
 
 @(private) Cmd_Write_Texture_Array :: struct { set: vk.DescriptorSet, slot: u32, view: vk.ImageView }
 
-@(private) Cmd_Dispatch :: struct { shader: Shader, kernel: int, x, y, z: u32 }
+@(private) Cmd_Dispatch :: struct { shader: Shader, kernel: int, x, y, z: u32, barrier: bool }
 
-@(private) Cmd_Dispatch_Indirect :: struct { shader: Shader, kernel: int, buffer: Buffer, offset: uint }
+@(private) Cmd_Dispatch_Indirect :: struct { shader: Shader, kernel: int, buffer: Buffer, offset: uint, barrier: bool }
 
 @(private) Cmd_Upload_Buffer :: struct { dst: Buffer, data: Span, src: Buffer }
 
@@ -2249,7 +2251,6 @@ record_bindings :: proc(cmd: ^Cmd, sub: ^Submission, s: Shader, kernel: int) -> 
 		count += 1
 	}
 
-	full_barrier(cb)
 	vk.CmdBindPipeline(cb, .COMPUTE, k.pipeline)
 	for p, i in s.params do if p.space != 0 && kernel_uses(k, i) do vk.CmdBindDescriptorSets(cb, .COMPUTE, s.layout, p.space, 1, &array_sets[i], 0, nil)
 	if count > 0 do vk.CmdPushDescriptorSet(cb, .COMPUTE, s.layout, 0, u32(count), raw_data(writes))
