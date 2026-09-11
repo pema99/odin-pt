@@ -11,7 +11,8 @@ BENCH_SCENES :: []string {
 	"splash.glb",
 	"gem_cuts.glb",
 	"dispersion_test.glb",
-	"sponza.glb"
+	"sponza.glb",
+	"colour_bleed.glb"
 }
 
 app_bench :: proc(state: ^App_State, samples: u32) {
