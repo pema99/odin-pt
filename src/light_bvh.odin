@@ -237,6 +237,7 @@ light_bvh_new :: proc(gp: ^Geometry_Pool, mp: ^Material_Pool) -> Light_BVH {
 	light_to_bit_trail := gpu_list_new(u32)
 	instance_to_light := gpu_list_new(u32)
 
+	// init to sentinel value
 	no_lights := make([]u32, gp.instance_to_pool.length)
 	defer delete(no_lights)
 	for i in 0..<len(no_lights) do no_lights[i] = max(u32)
