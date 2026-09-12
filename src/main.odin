@@ -17,13 +17,15 @@ import "gpu"
 // TODO:
 // - Samplers, mipmaps
 // - Denoising
-// - More shading models
 // - Skybox
-// - Many lights
-// - Sheen
-// - Clearcoat
-// - Anisotropic GGX
-// - COmplex IOR for metal
+// - More shading models
+//   - Sheen
+//   - Clearcoat
+//   - Anisotropic GGX
+//   - Velvet
+//   - Microflakes/glints
+//   - Labradorescence and aventurescence?
+//   - Asterism and chatoyancy?
 
 // Constants
 WIDTH  : u32 : 1280
