@@ -361,9 +361,7 @@ app_do_frame :: proc(state: ^App_State) {
         }
 
         // Main RT pass
-        if state.spectral_mode == .Spectral {
-            gpu.set_texture(cmd, trace, trace_kernel, "rgb_to_spectrum_lut", state.spectrum_lut)
-        }
+        gpu.set_texture(cmd, trace, trace_kernel, "rgb_to_spectrum_lut", state.spectrum_lut)
         gpu.set_cbuffer(cmd, trace, trace_kernel, "Camera", &state.cam)
         gpu.set_uniform(cmd, trace, trace_kernel, "screen_size", [2]u32{state.output.width, state.output.height})
         gpu.set_uniform(cmd, trace, trace_kernel, "frame", state.frame)
