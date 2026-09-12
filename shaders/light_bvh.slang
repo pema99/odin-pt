@@ -9,7 +9,6 @@ struct LightBounds
 	float3 direction;
 	float cos_cone_angle;
 	float power;
-	bool double_sided;
 }
 
 struct LightBVHNode
@@ -17,8 +16,9 @@ struct LightBVHNode
 	LightBounds bounds;
 	uint flags;
 
-	uint child_index() { return flags & 0x7FFFFFFF; }
-	uint light_index() { return flags & 0x7FFFFFFF; }
+	uint child_index() { return flags & 0x3FFFFFFF; }
+	uint light_index() { return flags & 0x3FFFFFFF; }
+	bool double_sided() { return bool((flags >> 30) & 1); }
 	bool is_leaf() { return bool(flags >> 31); }
 }
 
@@ -52,7 +52,7 @@ float sin_sub_clamped(float sin_theta_a, float cos_theta_a, float sin_theta_b, f
 
 // importance estimate for a cluster of lights
 // https://github.com/mmp/pbrt-v4/blob/b4ce9687e6c695f5582997c61b0c66cf064bdb4a/src/pbrt/lightsamplers.h#L144
-float light_bounds_importance(LightBounds bounds, float3 position, float3 normal)
+float light_bounds_importance(LightBounds bounds, bool double_sided, float3 position, float3 normal)
 {
     // get distance to shading point. further away lights are less important
     float3 centroid = (bounds.aabb_min + bounds.aabb_max) * 0.5;
@@ -67,7 +67,7 @@ float light_bounds_importance(LightBounds bounds, float3 position, float3 normal
     // call this angle theta_w. lights pointing away are less important
     float3 to_shading_dir = to_shading * rsqrt(sqr_distance);
     float cos_theta_w = dot(bounds.direction, to_shading_dir);
-    if (bounds.double_sided)
+    if (double_sided)
         cos_theta_w = abs(cos_theta_w);
     float sin_theta_w = sqrt(max(1.0 - cos_theta_w*cos_theta_w, 0.0));
 
@@ -123,8 +123,8 @@ bool pick_light_bvh(float3 position, float3 normal, float rng, out uint light_in
             LightBVHNode right = lbvh_nodes[node.child_index()];
 
             // calc importance of both children
-            float left_importance = light_bounds_importance(left.bounds, position, normal);
-            float right_importance = light_bounds_importance(right.bounds, position, normal);
+            float left_importance = light_bounds_importance(left.bounds, left.double_sided(), position, normal);
+            float right_importance = light_bounds_importance(right.bounds, right.double_sided(), position, normal);
             float importance_sum = left_importance + right_importance;
             if (importance_sum == 0)
                 return false;
@@ -197,8 +197,8 @@ float light_bvh_pick_density(float3 position, float3 normal, uint light_index)
         LightBVHNode right = lbvh_nodes[node.child_index()];
 
         // calc importance of both children
-        float left_importance = light_bounds_importance(left.bounds, position, normal);
-        float right_importance = light_bounds_importance(right.bounds, position, normal);
+        float left_importance = light_bounds_importance(left.bounds, left.double_sided(), position, normal);
+        float right_importance = light_bounds_importance(right.bounds, right.double_sided(), position, normal);
         float importance_sum = left_importance + right_importance;
         if (importance_sum == 0)
             return 0;

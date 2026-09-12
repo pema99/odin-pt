@@ -73,31 +73,26 @@ union_light_bounds :: proc(a: Light_Bounds, b: Light_Bounds) -> Light_Bounds
 }
 
 Light_BVH_Node :: struct {
-	bounds: Light_Bounds,
+	aabb_min: [3]f32,
+	aabb_max: [3]f32,
+	direction: [3]f32,
+	cos_cone_angle: f32,
+	power: f32,
 	data: bit_field u32 {
-		child_or_light_index: u32 | 31,
+		child_or_light_index: u32 | 30,
+		double_sided: b32 | 1,
 		is_leaf: b32 | 1,
 	}
 }
 
 light_bvh_leaf_new :: proc(light_index: u32, bounds: Light_Bounds) -> Light_BVH_Node {
-	return Light_BVH_Node {
-		bounds = bounds,
-		data = {
-			child_or_light_index = light_index,
-			is_leaf = true
-		}
-	}
+	return {bounds.aabb.min, bounds.aabb.max, bounds.direction, bounds.cos_cone_angle, bounds.power,
+		{child_or_light_index = light_index, double_sided = bounds.double_sided, is_leaf = true}}
 }
 
 light_bvh_inner_new :: proc(second_child_index: u32, bounds: Light_Bounds) -> Light_BVH_Node {
-	return Light_BVH_Node {
-		bounds = bounds,
-		data = {
-			child_or_light_index = second_child_index,
-			is_leaf = false
-		}
-	}
+	return {bounds.aabb.min, bounds.aabb.max, bounds.direction, bounds.cos_cone_angle, bounds.power,
+		{child_or_light_index = second_child_index, double_sided = bounds.double_sided, is_leaf = false}}
 }
 
 Emissive_Triangle :: struct {
