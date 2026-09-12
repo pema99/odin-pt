@@ -1,5 +1,7 @@
 public static const float PI = 3.14159265358979323846;
 public static const uint MAX_UINT = 0xFFFFFFFF;
+public static const float FLOAT_EPS = 0x1p-24;
+public static const float ONE_MINUS_FLOAT_EPS = 0x1.fffffep-1;
 
 public float luminance(float3 c)
 {

@@ -1,9 +1,9 @@
 import geometry;
 import scene;
 import common;
-import geometry;
 import spectrum;
 import bsdf;
+import light_bvh;
 
 public enum NEEMode
 {
@@ -26,7 +26,9 @@ public struct LightSample
 };
 
 public LightSample sample_emissive_triangle(
+    bool use_light_bvh,
     float3 shading_point,
+    float3 normal,
     float2 pick_rng,
     float2 point_rng)
 {
@@ -36,11 +38,24 @@ public LightSample sample_emissive_triangle(
         return light_sample;
 
     // Pick triangle
-    const uint emissive_instance_index = uint(min(emissive_instance_count * pick_rng.x, emissive_instance_count - 1));
-    const uint instance_index = emissive_instance_indices[emissive_instance_index];
-    const GeometryInfo geo = instance_to_pool[instance_index];
-    const uint triangle_count = geo.index_count / 3;
-    const uint triangle_index = uint(min(triangle_count * pick_rng.y, triangle_count - 1));
+    GeometryInfo geo;
+    uint instance_index, triangle_index;
+    float light_pick_density;
+    if (!use_light_bvh)
+    {
+        const uint emissive_instance_index = uint(min(emissive_instance_count * pick_rng.x, emissive_instance_count - 1));
+        instance_index = emissive_instance_indices[emissive_instance_index];
+        geo = instance_to_pool[instance_index];
+        const uint triangle_count = geo.index_count / 3;
+        triangle_index = uint(min(triangle_count * pick_rng.y, triangle_count - 1));
+        light_pick_density = rcp(emissive_instance_count * triangle_count);
+    }
+    else
+    {
+        if (!pick_light_bvh(shading_point, normal, pick_rng.x, instance_index, triangle_index, light_pick_density))
+            return light_sample;
+        geo = instance_to_pool[instance_index];
+    }
 
     // Load triangle
     const float3x4 transform = transforms[instance_index];
@@ -84,7 +99,8 @@ public LightSample sample_emissive_triangle(
         cos_theta_light = -cos_theta_light;
     }
 
-    float density = emissive_triangle_density(triangle_count, triangle_area, distance_to_light, cos_theta_light);
+    const float point_pick_density = emissive_triangle_density(triangle_area, distance_to_light, cos_theta_light);
+    float density = light_pick_density * point_pick_density;
 
     // Fill out result
     light_sample.emission = emission;
@@ -97,7 +113,6 @@ public LightSample sample_emissive_triangle(
 
 // density of sampling a point on an emissive triangle
 public float emissive_triangle_density(
-    uint triangle_count,
     float triangle_area,
     float distance_to_light,
     float cos_theta_light)
@@ -110,11 +125,8 @@ public float emissive_triangle_density(
     //                 = p_A (dist^2/|cos(theta_l)|)
     const float area_to_solid_angle_jacobian = (distance_to_light * distance_to_light) * rcp(cos_theta_light);
 
-    const float light_pick_density = rcp(emissive_instance_count * triangle_count);
     const float point_pick_density = rcp(triangle_area);
-    const float density = light_pick_density * point_pick_density * area_to_solid_angle_jacobian;
-
-    return density;
+    return point_pick_density * area_to_solid_angle_jacobian;
 }
 
 float balance_heuristic(float density0, float density1)

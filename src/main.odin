@@ -92,6 +92,7 @@ App_State :: struct {
     focus_on_click: bool,
     spectral_mode: Spectral_Mode,
     nee_mode: NEE_Mode,
+    use_light_bvh: b32,
     tonemapper: Tonemapper,
     exposure: f32,
 
@@ -150,6 +151,7 @@ app_init :: proc() -> App_State {
         max_bounces = 20,
         spectral_mode = .Spectral,
         nee_mode = .MIS,
+        use_light_bvh = false,
         tonemapper = .None,
         fov = 60.0,
         aperture = 0.0,
@@ -360,6 +362,8 @@ app_do_frame :: proc(state: ^App_State) {
         gpu.set_uniform(cmd, trace, trace_kernel, "aperture", state.aperture)
         gpu.set_uniform(cmd, trace, trace_kernel, "focus_distance", state.focus_distance)
         gpu.set_uniform(cmd, trace, trace_kernel, "nee_mode", state.nee_mode);
+        gpu.set_uniform(cmd, trace, trace_kernel, "use_light_bvh", state.use_light_bvh);
+        gpu.set_uniform(cmd, trace, trace_kernel, "lbvh_light_count", scene.light_bvh.lights.length);
 
         gpu.set_tlas(cmd, trace, trace_kernel, "scene", scene.tlas)
         gpu.set_buffer(cmd, trace, trace_kernel, "instance_to_pool", scene.geometry_pool.instance_to_pool.buffer)
@@ -370,6 +374,10 @@ app_do_frame :: proc(state: ^App_State) {
         gpu.set_buffer(cmd, trace, trace_kernel, "uvs", scene.geometry_pool.uvs.buffer)
         gpu.set_buffer(cmd, trace, trace_kernel, "indices", scene.geometry_pool.indices.buffer)
         gpu.set_buffer(cmd, trace, trace_kernel, "emissive_instance_indices", scene.geometry_pool.emissive_instance_indices.buffer)
+        gpu.set_buffer(cmd, trace, trace_kernel, "lbvh_lights", scene.light_bvh.lights.buffer)
+        gpu.set_buffer(cmd, trace, trace_kernel, "lbvh_nodes", scene.light_bvh.nodes.buffer)
+        gpu.set_buffer(cmd, trace, trace_kernel, "lbvh_light_to_bit_trail", scene.light_bvh.light_to_bit_trail.buffer)
+        gpu.set_buffer(cmd, trace, trace_kernel, "lbvh_instance_to_light", scene.light_bvh.instance_to_light.buffer)
         gpu.set_uniform(cmd, trace, trace_kernel, "emissive_instance_count", scene.geometry_pool.emissive_instance_indices.length)
         gpu.set_buffer(cmd, trace, trace_kernel, "materials", scene.material_pool.materials.buffer)
         gpu.set_texture_array(cmd, trace, trace_kernel, "textures", scene.material_pool.textures)
@@ -423,6 +431,12 @@ app_do_gui :: proc(state: ^App_State) -> (sample_dirty: bool, material_dirty: bo
     nee_mode := i32(state.nee_mode)
     if imgui.ComboChar("NEE Mode", &nee_mode, raw_data(nee_mode_names[:]), i32(len(nee_mode_names))) {
         state.nee_mode = NEE_Mode(nee_mode)
+        sample_dirty = true
+    }
+
+    use_light_bvh := bool(state.use_light_bvh)
+    if imgui.Checkbox("Use Light BVH", &use_light_bvh) {
+        state.use_light_bvh = b32(use_light_bvh)
         sample_dirty = true
     }
 

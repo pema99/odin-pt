@@ -14,6 +14,7 @@ uniform float fov;
 uniform float aperture;
 uniform float focus_distance;
 uniform NEEMode nee_mode;
+uniform bool use_light_bvh;
 cbuffer Camera // TODO: Don't need cbuffer for this...
 {
     float3 cam_pos;
@@ -145,7 +146,8 @@ void trace<let MODE : SpectralMode>()
                 if (depth > 0 && !previous_bounce_delta)
                 {
                     float cos_theta_light = abs(dot(hit_info.geometric_normal, ray_direction));
-                    float light_density = emissive_triangle_density(hit_info.triangle_count, hit_info.triangle_area, hit.distance, cos_theta_light);
+                    float light_pick_density = rcp(emissive_instance_count * hit_info.triangle_count);
+                    float light_density = light_pick_density * emissive_triangle_density(hit_info.triangle_area, hit.distance, cos_theta_light);
                     mis_weight = calculate_mis_weight(nee_mode, previous_bsdf_density, light_density);
                 }
                 float4 integrand = throughput
@@ -161,7 +163,7 @@ void trace<let MODE : SpectralMode>()
             {
                 float2 pick_rng = kronecker_2d(pixel_coord, frame, RNG_DIMS_NEE_PICK + depth * RNG_DIMS_PER_BOUNCE);
                 float2 point_rng = kronecker_2d(pixel_coord, frame, RNG_DIMS_NEE_POINT + depth * RNG_DIMS_PER_BOUNCE);
-                LightSample nee_sample = sample_emissive_triangle(hit_info.position, pick_rng, point_rng);
+                LightSample nee_sample = sample_emissive_triangle(use_light_bvh, hit_info.position, hit_info.normal, pick_rng, point_rng);
                 if (nee_sample.is_valid())
                 {
                     float4 nee_bsdf_density, nee_bsdf_value_times_cosine;
