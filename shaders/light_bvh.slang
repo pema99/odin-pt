@@ -179,3 +179,46 @@ public bool pick_light_bvh(float3 position, float3 normal, float rng, out uint i
 
     return result;
 }
+
+// density of picking a specific light, used for MIS
+float light_bvh_pick_density(float3 position, float3 normal, uint light_index)
+{
+    float density = 1;
+    uint bit_trail = lbvh_light_to_bit_trail[light_index];
+
+    uint node_index = 0;
+    while (true)
+    {
+        LightBVHNode node = lbvh_nodes[node_index];
+        if (node.is_leaf())
+            return density;
+
+        LightBVHNode left = lbvh_nodes[node_index + 1];
+        LightBVHNode right = lbvh_nodes[node.child_index()];
+
+        // calc importance of both children
+        float left_importance = light_bounds_importance(left.bounds, position, normal);
+        float right_importance = light_bounds_importance(right.bounds, position, normal);
+        float importance_sum = left_importance + right_importance;
+        if (importance_sum == 0)
+            return 0;
+
+        // accumulate density for the one we picked
+        bool pick_left = (bit_trail & 1) == 0;
+        density *= (pick_left ? left_importance : right_importance) / importance_sum;
+
+        // go to appropriate child and advance trail
+        node_index = pick_left ? node_index + 1 : node.child_index();
+        bit_trail >>= 1;
+    }
+}
+
+public float light_bvh_pick_density(float3 position, float3 normal, uint instance_index, uint triangle_index)
+{
+    const uint first_light_index = lbvh_instance_to_light[instance_index];
+    if (first_light_index == MAX_UINT)
+        return 0;
+
+    uint light_index = first_light_index + triangle_index;
+    return light_bvh_pick_density(position, normal, light_index);
+}

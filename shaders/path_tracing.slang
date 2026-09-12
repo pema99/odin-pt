@@ -85,6 +85,7 @@ void trace<let MODE : SpectralMode>()
     SpectrumBasis spectrum_basis = SpectrumBasis();
     float previous_bsdf_density = 0.0;
     bool previous_bounce_delta = false;
+    float3 previous_normal = 0.0;
     float3 color = 0.0;
     uint depth = 0;
 
@@ -107,6 +108,7 @@ void trace<let MODE : SpectralMode>()
             throughput = 1;
             previous_bsdf_density = 0.0;
             previous_bounce_delta = false;
+            previous_normal = 0.0;
             density_to_hero_ratio = 1;
             medium_absorption = 0.0;
 
@@ -146,8 +148,9 @@ void trace<let MODE : SpectralMode>()
                 if (depth > 0 && !previous_bounce_delta)
                 {
                     float cos_theta_light = abs(dot(hit_info.geometric_normal, ray_direction));
-                    float light_pick_density = rcp(emissive_instance_count * hit_info.triangle_count);
-                    float light_density = light_pick_density * emissive_triangle_density(hit_info.triangle_area, hit.distance, cos_theta_light);
+                    float pick_density = light_pick_density(use_light_bvh, ray_origin, previous_normal,
+                        hit.instance_id, hit.primitive_index, hit_info.triangle_count);
+                    float light_density = pick_density * emissive_triangle_density(hit_info.triangle_area, hit.distance, cos_theta_light);
                     mis_weight = calculate_mis_weight(nee_mode, previous_bsdf_density, light_density);
                 }
                 float4 integrand = throughput
@@ -219,6 +222,7 @@ void trace<let MODE : SpectralMode>()
 
             previous_bsdf_density = bsdf_density[0];
             previous_bounce_delta = bsdf_is_delta;
+            previous_normal = hit_info.normal;
 
             // Accumulate integrand
             throughput *= bsdf_value_times_cosine / bsdf_density[0];

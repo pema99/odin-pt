@@ -129,6 +129,24 @@ public float emissive_triangle_density(
     return point_pick_density * area_to_solid_angle_jacobian;
 }
 
+public float light_pick_density(
+    bool use_light_bvh,
+    float3 prev_position,
+    float3 prev_normal,
+    uint light_instance_index,
+    uint light_triangle_index,
+    uint light_triangle_count)
+{
+    if (use_light_bvh)
+    {
+        return light_bvh_pick_density(prev_position, prev_normal, light_instance_index, light_triangle_index);
+    }
+    else
+    {
+        return rcp(emissive_instance_count * light_triangle_count);
+    }
+}
+
 float balance_heuristic(float density0, float density1)
 {
     return 1.0 / (1.0 + density1 / density0);
