@@ -5,6 +5,7 @@ import common;
 import rng;
 import spectrum;
 import light_sampling;
+import keywords;
 
 uniform uint2 screen_size;
 uniform uint frame;
@@ -14,7 +15,6 @@ uniform float fov;
 uniform float aperture;
 uniform float focus_distance;
 uniform NEEMode nee_mode;
-uniform bool use_light_bvh;
 cbuffer Camera // TODO: Don't need cbuffer for this...
 {
     float3 cam_pos;
@@ -73,7 +73,7 @@ void store_pixel(uint2 coord, float3 color)
     image[coord] = float4(lerp(prev, color, 1.0 / (sample_count + 1)), 1.0);
 }
 
-void trace<let MODE : SpectralMode>()
+void trace()
 {
     // Path state
     uint2 pixel_coord = 0;
@@ -114,7 +114,7 @@ void trace<let MODE : SpectralMode>()
 
             float4 wavelengths = 0;
             spectrum_basis = SpectrumBasis();
-            if (MODE != SpectralMode.RGB)
+            if (USE_SPECTRAL_RENDERING)
             {
                 wavelengths = sample_wavelengths(kronecker_2d(pixel_coord, frame, RNG_DIM_WAVELENGTH).x);
                 spectrum_basis = get_spectrum_basis(wavelengths);
@@ -135,7 +135,7 @@ void trace<let MODE : SpectralMode>()
 
             float3 view_direction = -ray_direction;
             float3 specular_normal = ensure_valid_specular_normal(hit_info.geometric_normal, view_direction, hit_info.normal);
-            BSDF bsdf = get_material_bsdf<MODE>(material, spectrum_basis, incoming_outside, hit_info.normal, specular_normal);
+            BSDF bsdf = get_material_bsdf(material, spectrum_basis, incoming_outside, hit_info.normal, specular_normal);
 
             // Lambert-beer
             throughput *= exp(-medium_absorption * hit.distance);
@@ -148,15 +148,15 @@ void trace<let MODE : SpectralMode>()
                 if (depth > 0 && !previous_bounce_delta)
                 {
                     float cos_theta_light = abs(dot(hit_info.geometric_normal, ray_direction));
-                    float pick_density = light_pick_density(use_light_bvh, ray_origin, previous_normal,
+                    float pick_density = light_pick_density(USE_LIGHT_BVH, ray_origin, previous_normal,
                         hit.instance_id, hit.primitive_index, hit_info.triangle_count);
                     float light_density = pick_density * emissive_triangle_density(hit_info.triangle_area, hit.distance, cos_theta_light);
                     mis_weight = calculate_mis_weight(nee_mode, previous_bsdf_density, light_density);
                 }
                 float4 integrand = throughput
                     * mis_weight
-                    * upsample_ergb<MODE>(material.emission, spectrum_basis);
-                color += resolve_spectrum<MODE>(integrand, density_to_hero_ratio, spectrum_basis);
+                    * upsample_ergb(material.emission, spectrum_basis);
+                color += resolve_spectrum(integrand, density_to_hero_ratio, spectrum_basis);
             }
 
             // Next event estimation
@@ -166,7 +166,7 @@ void trace<let MODE : SpectralMode>()
             {
                 float2 pick_rng = kronecker_2d(pixel_coord, frame, RNG_DIMS_NEE_PICK + depth * RNG_DIMS_PER_BOUNCE);
                 float2 point_rng = kronecker_2d(pixel_coord, frame, RNG_DIMS_NEE_POINT + depth * RNG_DIMS_PER_BOUNCE);
-                LightSample nee_sample = sample_emissive_triangle(use_light_bvh, hit_info.position, hit_info.normal, pick_rng, point_rng);
+                LightSample nee_sample = sample_emissive_triangle(USE_LIGHT_BVH, hit_info.position, hit_info.normal, pick_rng, point_rng);
                 if (nee_sample.is_valid())
                 {
                     float4 nee_bsdf_density, nee_bsdf_value_times_cosine;
@@ -185,7 +185,7 @@ void trace<let MODE : SpectralMode>()
                     if (any(nee_bsdf_value_times_cosine > 0.0) &&
                         !trace_shadow_ray(nee_sample.shadow_ray_origin, shadow_ray_vector * rcp(shadow_ray_length), shadow_ray_length))
                     {
-                        float4 upsampled_emission = upsample_ergb<MODE>(nee_sample.emission, spectrum_basis);
+                        float4 upsampled_emission = upsample_ergb(nee_sample.emission, spectrum_basis);
 
                         float mis_weight = calculate_mis_weight(nee_mode, nee_sample.density, nee_bsdf_density[0]);
                         float4 integrand = throughput
@@ -194,7 +194,7 @@ void trace<let MODE : SpectralMode>()
                             * upsampled_emission
                             * rcp(nee_sample.density);
 
-                        color += resolve_spectrum<MODE>(integrand, density_to_hero_ratio, spectrum_basis);
+                        color += resolve_spectrum(integrand, density_to_hero_ratio, spectrum_basis);
                     }
                 }
             }
@@ -247,7 +247,7 @@ void trace<let MODE : SpectralMode>()
             if (outgoing_transmitted)
             {
                 if (incoming_outside) // air -> inside volume
-                    medium_absorption = get_material_absorption<MODE>(material, spectrum_basis);
+                    medium_absorption = get_material_absorption(material, spectrum_basis);
                 else // inside volume -> air
                     medium_absorption = 0.0;
             }
@@ -269,8 +269,8 @@ void trace<let MODE : SpectralMode>()
         else
         {
             float3 sky_color = float3(0.8, 0.7, 0.6);
-            color += resolve_spectrum<MODE>(
-                throughput * upsample_ergb<MODE>(sky_color, spectrum_basis),
+            color += resolve_spectrum(
+                throughput * upsample_ergb(sky_color, spectrum_basis),
                 density_to_hero_ratio,
                 spectrum_basis);
             store_pixel(pixel_coord, color);
@@ -281,8 +281,4 @@ void trace<let MODE : SpectralMode>()
 
 [shader("compute")]
 [numthreads(512, 1, 1)]
-void main_rgb() { trace<SpectralMode.RGB>(); }
-
-[shader("compute")]
-[numthreads(512, 1, 1)]
-void main_spectral() { trace<SpectralMode.Spectral>(); }
+void main() { trace(); }

@@ -1,4 +1,5 @@
 import common;
+import keywords;
 
 // === Public API ===
 
@@ -35,20 +36,20 @@ public struct SpectrumBasis
 
 // (e)RGB -> Spectrum or RGB
 // eRGB means RGB with illuminant E as the whitepoint
-public float4 upsample_ergb<let MODE : SpectralMode>(float3 rgb, SpectrumBasis basis)
+public float4 upsample_ergb(float3 rgb, SpectrumBasis basis)
 {
-    if (MODE == SpectralMode.RGB)
-        return float4(rgb, 0.0);
-    return ergb_to_spectrum(rgb, basis);
+    if (USE_SPECTRAL_RENDERING)
+        return ergb_to_spectrum(rgb, basis);
+    return float4(rgb, 0.0);
 }
 
 // Resolves a per-lane contribution (RGB or spectral) and density to a single contribution in RGB.
-public float3 resolve_spectrum<let MODE : SpectralMode>(
+public float3 resolve_spectrum(
     float4 contribution_over_hero_density,
     float4 density_over_hero_density,
     SpectrumBasis basis)
 {
-    if (MODE == SpectralMode.RGB)
+    if (!USE_SPECTRAL_RENDERING)
         return contribution_over_hero_density.rgb;
 
     // Note to future Pema:

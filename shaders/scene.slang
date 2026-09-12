@@ -2,6 +2,7 @@ import bsdf;
 import geometry;
 import common;
 import spectrum;
+import keywords;
 
 public struct MaterialInfo
 {
@@ -120,24 +121,24 @@ public float3 get_material_emission_fast(uint material_index, uint i0, uint i1, 
     return textures[mat.emission_texture_index].SampleLevel(texture_sampler, uv, 0).rgb;
 }
 
-public float4 get_material_absorption<let MODE : SpectralMode>(MaterialInfo mat, SpectrumBasis spectrum_basis)
+public float4 get_material_absorption(MaterialInfo mat, SpectrumBasis spectrum_basis)
 {
     if (mat.attenuation_distance <= 0.0)
         return 0.0;
 
     float4 transmittance;
-    if (MODE == SpectralMode.RGB)
-        transmittance = float4(mat.attenuation_color, 1.0);
+    if (USE_SPECTRAL_RENDERING)
+        transmittance = saturate(upsample_ergb(mat.attenuation_color, spectrum_basis));
     else
-        transmittance = saturate(upsample_ergb<MODE>(mat.attenuation_color, spectrum_basis));
+        transmittance = float4(mat.attenuation_color, 1.0);
 
     // https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_volume/README.md#attenuation
     return -log(transmittance) / mat.attenuation_distance;
 }
 
-public BSDF get_material_bsdf<let MODE : SpectralMode>(MaterialInfo mat, SpectrumBasis spectrum_basis, bool entering, float3 normal, float3 specular_normal)
+public BSDF get_material_bsdf(MaterialInfo mat, SpectrumBasis spectrum_basis, bool entering, float3 normal, float3 specular_normal)
 {
-    float4 albedo_spectrum = saturate(upsample_ergb<MODE>(mat.albedo, spectrum_basis));
+    float4 albedo_spectrum = saturate(upsample_ergb(mat.albedo, spectrum_basis));
 
     BSDF bsdf = make_overkill_bsdf(
         albedo_spectrum,
@@ -145,7 +146,7 @@ public BSDF get_material_bsdf<let MODE : SpectralMode>(MaterialInfo mat, Spectru
         mat.roughness,
         mat.index_of_refraction,
         mat.extinction,
-        MODE == SpectralMode.RGB ? 0.0 : mat.iridescence_factor,
+        USE_SPECTRAL_RENDERING ? mat.iridescence_factor : 0.0,
         mat.iridescence_ior,
         mat.iridescence_thickness,
         normal,
@@ -155,16 +156,16 @@ public BSDF get_material_bsdf<let MODE : SpectralMode>(MaterialInfo mat, Spectru
     if (mat.bsdf_type == BSDFType::Glass)
     {
         float4 ior;
-        if (MODE == SpectralMode.RGB)
-            ior = mat.index_of_refraction;
-        else
+        if (USE_SPECTRAL_RENDERING)
             ior = dispersive_ior(mat.index_of_refraction, mat.dispersion, spectrum_basis.wavelengths);
+        else
+            ior = mat.index_of_refraction;
         bsdf = make_glass_bsdf(
             mat.roughness,
             albedo_spectrum,
             ior,
             entering,
-            MODE == SpectralMode.RGB ? 0.0 : mat.iridescence_factor,
+            USE_SPECTRAL_RENDERING ? mat.iridescence_factor : 0.0,
             mat.iridescence_ior,
             mat.iridescence_thickness,
             specular_normal,

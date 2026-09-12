@@ -559,6 +559,8 @@ destroy_texture_array :: proc(ta: Texture_Array) {
 // A compute shader with one pipeline per kernel and shared reflection data.
 Shader :: struct {
 	name:       string,
+	path:       string,
+	variant:    string,
 	kernels:    []Kernel,
 	layout:     vk.PipelineLayout,
 	set_layout: vk.DescriptorSetLayout,
@@ -600,9 +602,43 @@ load_shader :: proc(spv: []byte, reflection_json: []byte, debug_name := "shader"
 }
 
 // Compiles a Slang source file with the Slang library (slang.dll) and builds a pipeline per kernel.
-// Every [shader("compute")] entry point becomes a kernel.
-// Compile errors and invalid input print the diagnostics and return ok = false; warnings are printed.
-compile_shader :: proc(path: string) -> (s: Shader, ok: bool) #optional_ok {
+// Keywords all start disabled. Use set_keyword to switch variant.
+compile_shader :: proc(path: string, enabled_keywords: []string = nil) -> (s: Shader, ok: bool) #optional_ok {
+	return compile_variant(path, enabled_keywords)
+}
+
+// Switches a shader to a set of enabled keywords, which may cause it to be recompiled.
+set_keywords :: proc(s: ^Shader, enabled_keywords: []string) -> bool {
+	if variant_name(s.path, enabled_keywords, virtual.arena_allocator(&scratch)) == s.variant do return true
+	variant, ok := compile_variant(s.path, enabled_keywords)
+	if !ok do return false
+	s^ = variant
+	return true
+}
+
+@(private)
+variant_name :: proc(path: string, enabled_keywords: []string, allocator: mem.Allocator) -> string {
+	names := slice.clone(enabled_keywords, allocator)
+	slice.sort(names)
+	b := strings.builder_make(allocator)
+	strings.write_string(&b, path)
+	for name in names do fmt.sbprintf(&b, "|%s", name)
+	return strings.to_string(b)
+}
+
+@(private)
+compile_variant :: proc(path: string, enabled_keywords: []string) -> (s: Shader, ok: bool) {
+	name := variant_name(path, enabled_keywords, virtual.arena_allocator(&scratch))
+	if cached, found := shader_variants[name]; found do return cached, true
+	s, ok = compile_shader_variant(path, enabled_keywords)
+	if !ok do return
+	s.variant = strings.clone(name)
+	shader_variants[s.variant] = s
+	return
+}
+
+@(private)
+compile_shader_variant :: proc(path: string, enabled_keywords: []string) -> (s: Shader, ok: bool) #optional_ok {
 	if slang_session == nil do slang_session = spCreateSession(nil)
 	request := spCreateCompileRequest(slang_session)
 	defer spDestroyCompileRequest(request)
@@ -618,6 +654,15 @@ compile_shader :: proc(path: string) -> (s: Shader, ok: bool) #optional_ok {
 	if spProcessCommandLineArguments(request, raw_data(&args), len(args)) < 0 {
 		log.errorf("compile_shader %s: %s", path, spGetDiagnosticOutput(request))
 		return
+	}
+	if len(enabled_keywords) > 0 {
+		alloc := virtual.arena_allocator(&scratch)
+		source := strings.builder_make(alloc)
+		for name in enabled_keywords {
+			fmt.sbprintf(&source, "export static const bool %s = true; ", name)
+		}
+		unit := spAddTranslationUnit(request, SLANG_SOURCE_LANGUAGE_SLANG, "specialization")
+		spAddTranslationUnitSourceString(request, unit, "specialization.slang", strings.clone_to_cstring(strings.to_string(source), alloc))
 	}
 	if spCompile(request) < 0 {
 		log.errorf("compile_shader %s:\n%s", path, spGetDiagnosticOutput(request))
@@ -637,12 +682,25 @@ compile_shader :: proc(path: string) -> (s: Shader, ok: bool) #optional_ok {
 	}
 	s, ok = create_shader(slice.bytes_from_ptr(code, int(size)), &r, filepath.stem(path))
 	if !ok do free_reflection(&r)
+	s.path = strings.clone(path)
 	return
 }
 
 // Waits for the GPU, then destroys the shader.
 destroy_shader :: proc(s: Shader) {
 	wait_idle()
+	alloc := virtual.arena_allocator(&scratch)
+	stale := make([dynamic]string, 0, len(shader_variants), alloc)
+	for key, variant in shader_variants do if variant.path == s.path do append(&stale, key)
+	for key in stale {
+		variant := shader_variants[key]
+		delete_key(&shader_variants, key)
+		destroy_shader_variant(variant)
+	}
+}
+
+@(private)
+destroy_shader_variant :: proc(s: Shader) {
 	for k in s.kernels {
 		vk.DestroyPipeline(device, k.pipeline, nil)
 		delete(k.name)
@@ -658,6 +716,8 @@ destroy_shader :: proc(s: Shader) {
 	delete(s.params)
 	delete(s.cbuffers)
 	delete(s.name)
+	delete(s.path)
+	delete(s.variant)
 }
 
 // A command list. Purely CPU-side until execute_cmd(). Bindings stick per kernel across dispatches.
@@ -853,13 +913,9 @@ kernel_uses :: proc(k: Kernel, param: int) -> bool {
 find_param :: proc(s: Shader, k: Kernel, name: string) -> (Shader_Param, bool) {
 	for p, i in s.params {
 		if p.name != name do continue
-		if !kernel_uses(k, i) {
-			log.errorf("%s: kernel %q does not use %q", s.name, k.name, name)
-			return {}, false
-		}
+		if !kernel_uses(k, i) do return {}, false
 		return p, true
 	}
-	log.errorf("%s: no parameter named %q", s.name, name)
 	return {}, false
 }
 
@@ -869,14 +925,10 @@ find_member :: proc(s: Shader, k: Kernel, name: string) -> (Shader_Member, bool)
 		if p.cbuffer < 0 do continue
 		for m in s.cbuffers[p.cbuffer].members {
 			if m.name != name do continue
-			if !kernel_uses(k, i) {
-				log.errorf("%s: kernel %q does not use %q", s.name, k.name, name)
-				return {}, false
-			}
+			if !kernel_uses(k, i) do return {}, false
 			return m, true
 		}
 	}
-	log.errorf("%s: no constant buffer member named %q", s.name, name)
 	return {}, false
 }
 
@@ -884,13 +936,9 @@ find_member :: proc(s: Shader, k: Kernel, name: string) -> (Shader_Member, bool)
 find_cbuffer :: proc(s: Shader, k: Kernel, name: string) -> (Shader_Cbuffer, bool) {
 	for p, i in s.params {
 		if p.cbuffer < 0 || s.cbuffers[p.cbuffer].name != name do continue
-		if !kernel_uses(k, i) {
-			log.errorf("%s: kernel %q does not use %q", s.name, k.name, name)
-			return {}, false
-		}
+		if !kernel_uses(k, i) do return {}, false
 		return s.cbuffers[p.cbuffer], true
 	}
-	log.errorf("%s: no constant buffer named %q", s.name, name)
 	return {}, false
 }
 
@@ -1864,7 +1912,9 @@ reflect_json :: proc(obj: json.Object, path: string) -> (r: Shader_Reflection, o
 }
 
 @(private) slang_session: rawptr
+@(private) shader_variants: map[string]Shader
 
+@(private) SLANG_SOURCE_LANGUAGE_SLANG :: 1
 @(private) SLANG_PARAMETER_CATEGORY_UNIFORM :: 8
 @(private) SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT :: 9
 @(private) SLANG_PARAMETER_CATEGORY_PUSH_CONSTANT_BUFFER :: 11
@@ -1899,6 +1949,8 @@ foreign slang {
 	spCreateCompileRequest :: proc(session: rawptr) -> rawptr ---
 	spDestroyCompileRequest :: proc(request: rawptr) ---
 	spProcessCommandLineArguments :: proc(request: rawptr, args: [^]cstring, count: i32) -> i32 ---
+	spAddTranslationUnit :: proc(request: rawptr, language: i32, name: cstring) -> i32 ---
+	spAddTranslationUnitSourceString :: proc(request: rawptr, unit: i32, path: cstring, source: cstring) ---
 	spCompile :: proc(request: rawptr) -> i32 ---
 	spGetDiagnosticOutput :: proc(request: rawptr) -> cstring ---
 	spGetCompileRequestCode :: proc(request: rawptr, size: ^uint) -> rawptr ---

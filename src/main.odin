@@ -70,6 +70,17 @@ camera_look :: proc(c: ^Camera, forward: [3]f32) {
 	c.up = linalg.cross(c.right, c.forward)
 }
 
+get_trace_keywords :: proc(state: ^App_State) -> []string {
+    enabled_keywords := make([dynamic]string, context.temp_allocator)
+    if state.spectral_mode == .Spectral {
+    	append(&enabled_keywords, "USE_SPECTRAL_RENDERING")
+    }
+    if state.use_light_bvh {
+    	append(&enabled_keywords, "USE_LIGHT_BVH")
+    }
+    return enabled_keywords[:]
+}
+
 shaders_last_write :: proc() -> (newest: time.Time) {
     f, _ := os.open("shaders")
     defer os.close(f)
@@ -137,8 +148,6 @@ app: App_State
 
 // App api
 app_init :: proc() -> App_State {
-    context.logger = log.create_console_logger()
-
 	gpu.init(
         title = "Odin Path Tracer",
         width = WIDTH, height = HEIGHT,
@@ -196,7 +205,7 @@ app_init :: proc() -> App_State {
 
     state.cmd = gpu.create_cmd()
     state.last_shader_write = shaders_last_write()
-    trace, trace_ok := gpu.compile_shader(state.shader_path)
+    trace, trace_ok := gpu.compile_shader(state.shader_path, get_trace_keywords(&state))
     if !trace_ok {
         panic("failed to compile shaders/path_tracing.slang")
     }
@@ -245,7 +254,6 @@ app_delete :: proc(state: ^App_State) {
     }
     delete(state.scene_names)
     gpu.cleanup()
-    log.destroy_console_logger(context.logger)
 }
 
 app_load_scene :: proc(state: ^App_State, index: i32) {
@@ -302,8 +310,8 @@ app_tick :: proc(state: ^App_State) {
     curr_shader_write := shaders_last_write()
     if curr_shader_write != state.last_shader_write {
         state.last_shader_write = curr_shader_write
-        if new_trace, ok := gpu.compile_shader(state.shader_path); ok {
-            gpu.destroy_shader(state.trace)
+        gpu.destroy_shader(state.trace)
+        if new_trace, ok := gpu.compile_shader(state.shader_path, get_trace_keywords(state)); ok {
             state.trace = new_trace
             state.sample_count = 0
         }
@@ -324,12 +332,15 @@ app_do_frame :: proc(state: ^App_State) {
     state.last_time = now
     camera_dirty := app_update_camera(&state.cam, &state.last_mouse, delta_time)
 
-    cmd := state.cmd
+    gpu.set_keywords(&state.trace, get_trace_keywords(state))
     trace := state.trace
+
+    cmd := state.cmd
     postfx := state.postfx
     scene := &state.scene
-    trace_kernel := state.spectral_mode == .RGB ? "main_rgb" : "main_spectral"
+    trace_kernel := "main"
     reset_kernel := "reset"
+    postfx_kernel := "main"
 
     gpu.start_frame()
 
@@ -362,7 +373,6 @@ app_do_frame :: proc(state: ^App_State) {
         gpu.set_uniform(cmd, trace, trace_kernel, "aperture", state.aperture)
         gpu.set_uniform(cmd, trace, trace_kernel, "focus_distance", state.focus_distance)
         gpu.set_uniform(cmd, trace, trace_kernel, "nee_mode", state.nee_mode);
-        gpu.set_uniform(cmd, trace, trace_kernel, "use_light_bvh", state.use_light_bvh);
         gpu.set_uniform(cmd, trace, trace_kernel, "lbvh_light_count", scene.light_bvh.lights.length);
 
         gpu.set_tlas(cmd, trace, trace_kernel, "scene", scene.tlas)
@@ -390,12 +400,12 @@ app_do_frame :: proc(state: ^App_State) {
         // Tonemap
         display := state.output
         if state.tonemapper != Tonemapper.None || state.exposure != 0 {
-            gpu.set_uniform(cmd, postfx, "main", "screen_size", [2]u32{state.output.width, state.output.height})
-            gpu.set_uniform(cmd, postfx, "main", "tonemapper", state.tonemapper)
-            gpu.set_uniform(cmd, postfx, "main", "exposure", state.exposure)
-            gpu.set_texture(cmd, postfx, "main", "input", state.output)
-            gpu.set_texture(cmd, postfx, "main", "output", state.output_postfx)
-            gpu.dispatch(cmd, postfx, "main", state.postfx_num_groups.x, state.postfx_num_groups.y)
+            gpu.set_uniform(cmd, postfx, postfx_kernel, "screen_size", [2]u32{state.output.width, state.output.height})
+            gpu.set_uniform(cmd, postfx, postfx_kernel, "tonemapper", state.tonemapper)
+            gpu.set_uniform(cmd, postfx, postfx_kernel, "exposure", state.exposure)
+            gpu.set_texture(cmd, postfx, postfx_kernel, "input", state.output)
+            gpu.set_texture(cmd, postfx, postfx_kernel, "output", state.output_postfx)
+            gpu.dispatch(cmd, postfx, postfx_kernel, state.postfx_num_groups.x, state.postfx_num_groups.y)
             display = state.output_postfx
         }
 
@@ -589,6 +599,9 @@ app_update_camera :: proc(c: ^Camera, last_mouse: ^[2]f64, delta_time: f32) -> b
 }
 
 main :: proc() {
+    context.logger = log.create_console_logger()
+    defer log.destroy_console_logger(context.logger)
+
     app = app_init()
     defer app_delete(&app)
 
