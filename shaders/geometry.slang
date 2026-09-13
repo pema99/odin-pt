@@ -156,6 +156,24 @@ public float3 cosine_hemisphere(float2 u, float3 normal)
     return mul(basis, localDir);
 }
 
+public float3 uniform_hemisphere(float2 u, float3 normal)
+{
+    float z = u.x;
+    float r = sqrt(max(0.0f, 1.0f - z * z));
+    float phi = 2.0f * PI * u.y;
+    float3 localDir = float3(r * cos(phi), r * sin(phi), z);
+    float3x3 basis = ortho_basis_from_vector(normal);
+    return mul(basis, localDir);
+}
+
+public float3 uniform_sphere(float2 u)
+{
+    float z = 1.0f - 2.0f * u.x;
+    float r = sqrt(max(0.0f, 1.0f - z * z));
+    float phi = 2.0f * PI * u.y;
+    return float3(r * cos(phi), r * sin(phi), z);
+}
+
 // A Low-Distortion Map Between Triangle and Square, Heitz, 2019
 // https://eheitzresearch.wordpress.com/749-2/
 public void square_to_triangle(inout float2 u)
